@@ -1,10 +1,12 @@
 #ifndef	_EEPROM_24XX_H
 #define	_EEPROM_24XX_H
 
-// 	eeprom 24cxxx library				version 1V00
-//	Writen by "Nima Askari"			www.github.com/NimaLTD
+// 	eeprom 24cxxx library				version 1V01
+//	"Nima Askari"								www.github.com/NimaLTD
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "EEPROM24xxConfig.h"
 
 bool		EEPROM24XX_IsConnected(void);
