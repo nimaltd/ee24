@@ -1,6 +1,6 @@
 # EEPROM24xx
 24xx EEPROM library for stm32 HAL
-solve F1 i2c problem
+<\b> solve F1 i2c problem
 ```
 
 void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
@@ -10,7 +10,7 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
   if(i2cHandle->Instance==I2C2)
   {
   /* USER CODE BEGIN I2C2_MspInit 0 */
-		__HAL_RCC_I2C2_CLK_ENABLE();
+   __HAL_RCC_I2C2_CLK_ENABLE();  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<  add manualy
   /* USER CODE END I2C2_MspInit 0 */
   
     __HAL_RCC_GPIOB_CLK_ENABLE();
