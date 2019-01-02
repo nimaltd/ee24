@@ -1,6 +1,6 @@
 # EEPROM24xx
 24xx EEPROM library for stm32 HAL
-<\b> solve F1 i2c problem
+< \b> solve F1 i2c problem
 ```
 
 void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
