@@ -7,7 +7,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "EEPROM24xxConfig.h"
+#include "eeprom24xxConfig.h"
 
 bool		EEPROM24XX_IsConnected(void);
 bool		EEPROM24XX_Save(uint16_t Address,void *data,size_t size_of_data);	
