@@ -20,13 +20,13 @@ uint8_t ee24_lock = 0;
 //################################################################################################################
 bool ee24_isConnected(void)
 {
-	#if	(_EEPROM_USE_WP_PIN==1)
-	HAL_GPIO_WritePin(_EEPROM_WP_GPIO,_EEPROM_WP_PIN,GPIO_PIN_SET);
-	#endif
-	if (HAL_I2C_IsDeviceReady(&_EEPROM_I2C, _EEPROM_ADDRESS, 2, 100)==HAL_OK)
-		return true;
-	else
-		return false;	
+  #if	(_EEPROM_USE_WP_PIN==1)
+  HAL_GPIO_WritePin(_EEPROM_WP_GPIO,_EEPROM_WP_PIN,GPIO_PIN_SET);
+  #endif
+  if (HAL_I2C_IsDeviceReady(&_EEPROM_I2C, _EEPROM_ADDRESS, 2, 100)==HAL_OK)
+    return true;
+  else
+    return false;	
 }
 //################################################################################################################
 bool ee24_write(uint16_t address, uint8_t *data, size_t len, uint32_t timeout)
