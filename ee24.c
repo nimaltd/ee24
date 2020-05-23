@@ -94,16 +94,16 @@ bool ee24_read(uint16_t address, uint8_t *data, size_t len, uint32_t timeout)
 	HAL_GPIO_WritePin(_EEPROM_WP_GPIO, _EEPROM_WP_PIN, GPIO_PIN_SET);
 	#endif
 	#if ((_EEPROM_SIZE_KBIT==1) || (_EEPROM_SIZE_KBIT==2))
-	if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS, address, I2C_MEMADD_SIZE_8BIT, data, len, 100) == HAL_OK)
-	#elif (_EEPROM_SIZE_KBIT == 4)
-	if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS | ((address & 0x0100 >> 7)), (Address & 0xff), I2C_MEMADD_SIZE_8BIT, data, len, 100) == HAL_OK)
-	#elif (_EEPROM_SIZE_KBIT == 8)
-	if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS | ((address & 0x0300 >> 7)), (Address & 0xff), I2C_MEMADD_SIZE_8BIT, data, len, 100) == HAL_OK)
-	#elif (_EEPROM_SIZE_KBIT==16)
-	if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS | ((address & 0x0700>> 7)), (Address & 0xff), I2C_MEMADD_SIZE_8BIT, data, len, 100) == HAL_OK)
-	#else
-	if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS, address, I2C_MEMADD_SIZE_16BIT, data, len, timeout) == HAL_OK)
-	#endif
+  if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS, address, I2C_MEMADD_SIZE_8BIT, data, len, 100) == HAL_OK)
+  #elif (_EEPROM_SIZE_KBIT == 4)
+  if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS | ((address & 0x0100 >> 7)), (Address & 0xff), I2C_MEMADD_SIZE_8BIT, data, len, 100) == HAL_OK)
+  #elif (_EEPROM_SIZE_KBIT == 8)
+  if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS | ((address & 0x0300 >> 7)), (Address & 0xff), I2C_MEMADD_SIZE_8BIT, data, len, 100) == HAL_OK)
+  #elif (_EEPROM_SIZE_KBIT==16)
+  if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS | ((address & 0x0700>> 7)), (Address & 0xff), I2C_MEMADD_SIZE_8BIT, data, len, 100) == HAL_OK)
+  #else
+  if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS, address, I2C_MEMADD_SIZE_16BIT, data, len, timeout) == HAL_OK)
+  #endif
 	{
     ee24_lock = 0;
     return true;
