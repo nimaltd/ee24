@@ -7,11 +7,13 @@
   Instagram:  http://instagram.com/github.NimaLTD
   Youtube:    https://www.youtube.com/channel/UCUhY7qY1klJm1d2kulr9ckw
   
-  Version:    2.0.0
+  Version:    2.1.0
   
   
   Reversion History:
   
+  (2.1.0)
+  Fix write bytes.
   
   (2.0.0)
   Rewrite again.

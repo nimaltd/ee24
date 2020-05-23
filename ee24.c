@@ -31,26 +31,19 @@ bool ee24_isConnected(void)
 //################################################################################################################
 bool ee24_write(uint16_t address, uint8_t *data, size_t len, uint32_t timeout)
 {
-  uint16_t  p, b, w;
-  uint32_t startTime = HAL_GetTick();
-  while (ee24_lock == 1)
-  {
-    if (HAL_GetTick() - startTime >= timeout) 
-      return false;
-    ee24_delay(1);
-  }
+  if (ee24_lock == 1)
+    return false;
   ee24_lock = 1; 
+  uint16_t w;
+  uint32_t startTime = HAL_GetTick();
 	#if	(_EEPROM_USE_WP_PIN==1)
 	HAL_GPIO_WritePin(_EEPROM_WP_GPIO, _EEPROM_WP_PIN,GPIO_PIN_RESET);
-	#endif	
+	#endif
   while(1)
   {
-    p = len / _EEPROM_PSIZE;
-    b = len % _EEPROM_PSIZE;
-    if( p > 0)
-      w = _EEPROM_PSIZE;
-    else
-      w = b;
+    w = _EEPROM_PSIZE - (address  % _EEPROM_PSIZE);
+    if (w > len)
+      w = len;        
     #if ((_EEPROM_SIZE_KBIT==1) || (_EEPROM_SIZE_KBIT==2))
     if (HAL_I2C_Mem_Write(&_EEPROM_I2C, _EEPROM_ADDRESS, address, I2C_MEMADD_SIZE_8BIT, data, w, 100) == HAL_OK)
     #elif (_EEPROM_SIZE_KBIT==4)
