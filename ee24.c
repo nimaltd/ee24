@@ -87,13 +87,8 @@ bool ee24_write(uint16_t address, uint8_t *data, size_t len, uint32_t timeout)
 //################################################################################################################
 bool ee24_read(uint16_t address, uint8_t *data, size_t len, uint32_t timeout)
 {
-  uint32_t startTime = HAL_GetTick();
-  while (ee24_lock == 1)
-  {
-    if (HAL_GetTick() - startTime >= timeout) 
-      return false;
-    ee24_delay(1);
-  }
+  if (ee24_lock == 1)
+    return false;
   ee24_lock = 1;
 	#if (_EEPROM_USE_WP_PIN==1)
 	HAL_GPIO_WritePin(_EEPROM_WP_GPIO, _EEPROM_WP_PIN, GPIO_PIN_SET);
@@ -107,7 +102,7 @@ bool ee24_read(uint16_t address, uint8_t *data, size_t len, uint32_t timeout)
 	#elif (_EEPROM_SIZE_KBIT==16)
 	if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS | ((address & 0x0700>> 7)), (Address & 0xff), I2C_MEMADD_SIZE_8BIT, data, len, 100) == HAL_OK)
 	#else
-	if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS, address, I2C_MEMADD_SIZE_16BIT, data, len, 100) == HAL_OK)
+	if (HAL_I2C_Mem_Read(&_EEPROM_I2C, _EEPROM_ADDRESS, address, I2C_MEMADD_SIZE_16BIT, data, len, timeout) == HAL_OK)
 	#endif
 	{
     ee24_lock = 0;
