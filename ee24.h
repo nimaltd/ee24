@@ -22,6 +22,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include "ee24Config.h"
 
 bool    ee24_isConnected(void);
