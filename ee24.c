@@ -115,3 +115,16 @@ bool ee24_read(uint16_t address, uint8_t *data, size_t len, uint32_t timeout)
   }    
 }
 //################################################################################################################
+bool ee24_eraseChip(void)
+{
+  const uint8_t eraseData[32] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF\
+    , 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  uint32_t bytes = 0;
+  while ( bytes < (_EEPROM_SIZE_KBIT / 8) * 1024)
+  {
+    ee24_write(bytes, (uint8_t*)eraseData, sizeof(eraseData), 100);
+    bytes += sizeof(eraseData);           
+  }
+  return true;  
+}
+//################################################################################################################
