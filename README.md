@@ -35,3 +35,20 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
   }
 }
 ```
+example:
+```
+#include "ee24.h"
+
+uint8_t data[1024];
+int main(void)
+{
+  if (ee24_isConnected())
+  {
+    ee24_read(0, data, 1024, 1000);
+  }
+  while(1)
+  {
+  
+  }
+}
+```
