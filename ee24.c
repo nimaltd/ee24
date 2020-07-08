@@ -122,7 +122,8 @@ bool ee24_eraseChip(void)
   uint32_t bytes = 0;
   while ( bytes < (_EEPROM_SIZE_KBIT / 8) * 1024)
   {
-    ee24_write(bytes, (uint8_t*)eraseData, sizeof(eraseData), 100);
+    if (ee24_write(bytes, (uint8_t*)eraseData, sizeof(eraseData), 100) == false)
+      return false;
     bytes += sizeof(eraseData);           
   }
   return true;  
