@@ -7,10 +7,13 @@
   Instagram:  http://instagram.com/github.NimaLTD
   Youtube:    https://www.youtube.com/channel/UCUhY7qY1klJm1d2kulr9ckw
   
-  Version:    2.2.0
+  Version:    2.2.1
   
   
   Reversion History:
+  
+  (2.2.1)
+  Fix erase chip bug.
   
   (2.2.0)
   Add erase chip function.
