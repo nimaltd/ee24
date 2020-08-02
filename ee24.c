@@ -36,9 +36,9 @@ bool ee24_write(uint16_t address, uint8_t *data, size_t len, uint32_t timeout)
   ee24_lock = 1; 
   uint16_t w;
   uint32_t startTime = HAL_GetTick();
-	#if	(_EEPROM_USE_WP_PIN==1)
-	HAL_GPIO_WritePin(_EEPROM_WP_GPIO, _EEPROM_WP_PIN,GPIO_PIN_RESET);
-	#endif
+  #if	(_EEPROM_USE_WP_PIN==1)
+  HAL_GPIO_WritePin(_EEPROM_WP_GPIO, _EEPROM_WP_PIN,GPIO_PIN_RESET);
+  #endif
   while (1)
   {
     w = _EEPROM_PSIZE - (address  % _EEPROM_PSIZE);
