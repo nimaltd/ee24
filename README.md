@@ -7,7 +7,7 @@
 -  Youtube:    https://www.youtube.com/@nimaltd  
 -  LinkedIn:   https://www.linkedin.com/in/nimaltd  
 -  Instagram:  https://instagram.com/github.NimaLTD  
-<br /> solve F1 i2c problem
+solve F1 i2c problem
 ```
 
 void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
