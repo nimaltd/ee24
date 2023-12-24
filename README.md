@@ -1,6 +1,6 @@
 # 24xx EEPROM library for stm32 HAL
 ---  
-## Please Do not Forget to get STAR, DONATE and support me on social networks. Thank you.:sparkling_heart:  
+## Please Do not Forget to get STAR, DONATE and support me on social networks. Thank you. :sparkling_heart:  
 ---   
 -  Author:     Nima Askari  
 -  Github:     https://www.github.com/NimaLTD
