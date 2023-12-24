@@ -1,5 +1,4 @@
 
-
 #include "ee24.h"
 
 #if (EE24_SIZE <= 2)
@@ -62,19 +61,19 @@ bool EE24_Read(EE24_HandleTypeDef *Handle, uint32_t Address, uint8_t *Data, size
 	do
 	{
 #if ((EE24_SIZE == EE24_1KBIT) || (EE24_SIZE == EE24_2KBIT))
-    if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
+		if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
 #elif (EE24_SIZE == EE24_4KBIT)
-    if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address | ((Address & 0x0100) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
+		if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address | ((Address & 0x0100) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
 #elif (EE24_SIZE == EE24_8KBIT)
-    if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address | ((Address & 0x0300) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
+		if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address | ((Address & 0x0300) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
 #elif (EE24_SIZE == EE24_16KBIT)
-	  if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address | ((Address & 0x0700) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
+		if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address | ((Address & 0x0700) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
 #else
-    if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_16BIT, Data, Len, Timeout) == HAL_OK)
+		if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_16BIT, Data, Len, Timeout) == HAL_OK)
 #endif
-    {
+		{
     	answer = true;
-    }
+		}
 	}
 	while (0);
 
@@ -90,46 +89,46 @@ bool EE24_Write(EE24_HandleTypeDef *Handle, uint32_t Address, uint8_t *Data, siz
 	bool answer = false;
 	do
 	{
-	  uint16_t w;
-	  uint32_t startTime = HAL_GetTick();
-	  while (1)
-	  {
-	    w = EE24_PSIZE - (Address  % EE24_PSIZE);
-	    if (w > Len)
-	    {
-	    	w = Len;
-	    }
+		uint16_t w;
+		uint32_t startTime = HAL_GetTick();
+		while (1)
+		{
+			w = EE24_PSIZE - (Address  % EE24_PSIZE);
+			if (w > Len)
+			{
+				w = Len;
+			}
 #if ((EE24_SIZE == EE24_1KBIT) || (EE24_SIZE == EE24_2KBIT))
-        if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
+			if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
 #elif (EE24_SIZE == EE24_4KBIT)
-        if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address | ((Address & 0x0100) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, w, Timeout) == HAL_OK)
+			if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address | ((Address & 0x0100) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, w, Timeout) == HAL_OK)
 #elif (EE24_SIZE == EE24_8KBIT)
-        if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address | ((Address & 0x0300) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, w, Timeout) == HAL_OK)
+			if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address | ((Address & 0x0300) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, w, Timeout) == HAL_OK)
 #elif (EE24_SIZE == EE24_16KBIT)
-        if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address | ((Address & 0x0700) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, w, Timeout) == HAL_OK)
+			if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address | ((Address & 0x0700) >> 7), (address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, w, Timeout) == HAL_OK)
 #else
-        if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_16BIT, Data, w, Timeout) == HAL_OK)
+			if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_16BIT, Data, w, Timeout) == HAL_OK)
 #endif
-	    {
-	      EE24_Delay(10);
-	      Len -= w;
-	      Data += w;
-	      Address += w;
-	      if (Len == 0)
-	      {
-	        answer = true;
-	        break;
-	      }
-	      if (HAL_GetTick() - startTime >= Timeout)
-	      {
-	        break;
-	      }
-	    }
-	    else
-	    {
-	    	break;
-	    }
-	  }
+			{
+				EE24_Delay(10);
+				Len -= w;
+				Data += w;
+				Address += w;
+				if (Len == 0)
+				{
+					answer = true;
+					break;
+				}
+				if (HAL_GetTick() - startTime >= Timeout)
+				{
+					break;
+				}
+			}
+			else
+			{
+				break;
+			}
+		}
 	}
 	while (0);
 
