@@ -11,6 +11,8 @@
 * Install Library from https://github.com/nimaltd/STM32-PACK/raw/main/EE24/NimaLTD.I-CUBE-EE24.pdsc
 * Add and enable it.
 * Enable I2C.
+* Select 'Generate peripheral initialization as a pair of .c/.h files per peripheral' on the Code Generator Tab.
+* Generate code.
 * Define a structure of `EE24_HandleTypeDef`.
 * Call `EE24_Init()` and enjoy.
 ---
