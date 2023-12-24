@@ -72,7 +72,7 @@ bool EE24_Read(EE24_HandleTypeDef *Handle, uint32_t Address, uint8_t *Data, size
 		if (HAL_I2C_Mem_Read(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_16BIT, Data, Len, Timeout) == HAL_OK)
 #endif
 		{
-    	answer = true;
+			answer = true;
 		}
 	}
 	while (0);
