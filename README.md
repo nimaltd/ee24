@@ -39,12 +39,14 @@ example:
 ```
 #include "ee24.h"
 
+EE24_HandleTypeDef ee24;
+
 uint8_t data[1024];
 int main(void)
 {
-  if (ee24_isConnected())
+  if (EE24_Init(&ee24, &hi2c1, 0xA0))
   {
-    ee24_read(0, data, 1024, 1000);
+    EE24_Read(&ee24, 0, data, 1024, 1000);
   }
   while(1)
   {
