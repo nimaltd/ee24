@@ -8,7 +8,11 @@
 -  LinkedIn:   https://www.linkedin.com/in/nimaltd  
 -  Instagram:  https://instagram.com/github.NimaLTD
 ---
-https://github.com/nimaltd/STM32-PACK/raw/main/EE24/NimaLTD.I-CUBE-EE24.pdsc
+* Install Library from https://github.com/nimaltd/STM32-PACK/raw/main/EE24/NimaLTD.I-CUBE-EE24.pdsc
+* Add and enable it.
+* Enable I2C.
+* Define a structure of `EE24_HandleTypeDef`.
+* Call `EE24_Init()` and enjoy.
 ---
 solve F1 i2c problem
 ```
