@@ -1,9 +1,12 @@
 # 24xx EEPROM library for stm32 HAL
-[![ko-fi](https://www.ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/O5O4221XY)
-* http://www.github.com/NimaLTD   
-* https://www.instagram.com/github.nimaltd/   
-* https://www.youtube.com/@nimaltd 
-
+---  
+## Please Do not Forget to get STAR, DONATE and support me on social networks. Thank you. :sparkling_heart:  
+---   
+-  Author:     Nima Askari  
+-  Github:     https://www.github.com/NimaLTD
+-  Youtube:    https://www.youtube.com/@nimaltd  
+-  LinkedIn:   https://www.linkedin.com/in/nimaltd  
+-  Instagram:  https://instagram.com/github.NimaLTD  
 <br /> solve F1 i2c problem
 ```
 
