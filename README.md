@@ -40,10 +40,12 @@ example:
 #include "ee24.h"
 
 EE24_HandleTypeDef ee24;
-
 uint8_t data[1024];
 int main(void)
 {
+  ...
+  ...
+  ...
   if (EE24_Init(&ee24, &hi2c1, EE24_ADDRESS_DEFAULT))
   {
     EE24_Read(&ee24, 0, data, 1024, 1000);
