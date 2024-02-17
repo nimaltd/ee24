@@ -6,7 +6,7 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2023 STMicroelectronics.
+  * Copyright (c) 2024 STMicroelectronics.
   * All rights reserved.
   *
   * This software is licensed under terms that can be found in the LICENSE file
@@ -39,14 +39,17 @@
 #define EE24_CMSIS_RTOS_V2                    2
 
 /**
-	MiddleWare name : NimaLTD.I-CUBE-EE24.3.0.0
+	MiddleWare name : NimaLTD.I-CUBE-EE24.3.1.0
 	MiddleWare fileName : NimaLTD.I-CUBE-EE24_conf.h
 */
 /*---------- EE24_SIZE  -----------*/
-#define EE24_SIZE      EE24_16KBIT
+#define EE24_SIZE      EE24_8KBIT
 
 /*---------- EE24_CMSIS_RTOS  -----------*/
 #define EE24_CMSIS_RTOS      EE24_CMSIS_RTOS_DISABLE
+
+/*---------- EE24_USE_WP_PIN  -----------*/
+#define EE24_USE_WP_PIN      true
 
 #ifdef __cplusplus
 }
