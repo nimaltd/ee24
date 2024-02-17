@@ -9,10 +9,14 @@
   Youtube:    https://www.youtube.com/@nimaltd
   Instagram:  https://instagram.com/github.NimaLTD
 
-  Version:    3.0.1
+  Version:    3.1.0
 
   History:
-			  3.0.1
+              3.1.0
+              - Add WP pin control
+              - Fix 1Kb and 2Kb memory writing
+
+			        3.0.1
               - Fix Address 
                 			  
               3.0.0
@@ -51,14 +55,21 @@ typedef struct
 	I2C_HandleTypeDef      *HI2c;
 	uint8_t                Address;
 	uint8_t                Lock;
+#if EE24_USE_WP_PIN == true
+	GPIO_TypeDef           *WpGpio;
+	uint16_t                WpPin;
+#endif
 
 } EE24_HandleTypeDef;
 
 /***********************************************************************************************************/
 /***********************************************************************************************************/
 /***********************************************************************************************************/
-
+#if EE24_USE_WP_PIN == false
 bool EE24_Init(EE24_HandleTypeDef *Handle, I2C_HandleTypeDef *HI2c, uint8_t I2CAddress);
+#else
+bool EE24_Init(EE24_HandleTypeDef *Handle, I2C_HandleTypeDef *HI2c, uint8_t I2CAddress, GPIO_TypeDef *WpGpio, uint16_t WpPin);
+#endif
 bool EE24_Read(EE24_HandleTypeDef *Handle, uint32_t Address, uint8_t *Data, size_t Len, uint32_t Timeout);
 bool EE24_Write(EE24_HandleTypeDef *Handle, uint32_t Address, uint8_t *Data, size_t Len, uint32_t Timeout);
 

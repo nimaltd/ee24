@@ -32,6 +32,7 @@ void EE24_UnLock(EE24_HandleTypeDef *Handle)
 /***********************************************************************************************************/
 /***********************************************************************************************************/
 
+#if EE24_USE_WP_PIN == false
 bool EE24_Init(EE24_HandleTypeDef *Handle, I2C_HandleTypeDef *HI2c, uint8_t I2CAddress)
 {
 	bool answer = false;
@@ -52,6 +53,31 @@ bool EE24_Init(EE24_HandleTypeDef *Handle, I2C_HandleTypeDef *HI2c, uint8_t I2CA
 
 	return answer;
 }
+#else
+bool EE24_Init(EE24_HandleTypeDef *Handle, I2C_HandleTypeDef *HI2c, uint8_t I2CAddress, GPIO_TypeDef *WpGpio, uint16_t WpPin)
+{
+	bool answer = false;
+	do
+	{
+		if ((Handle == NULL) || (HI2c == NULL) || (WpGpio == NULL))
+		{
+			break;
+		}
+		Handle->HI2c = HI2c;
+		Handle->Address = I2CAddress;
+		Handle->WpGpio = WpGpio;
+		Handle->WpPin = WpPin;
+		HAL_GPIO_WritePin(Handle->WpGpio, Handle->WpPin, GPIO_PIN_SET);
+		if (HAL_I2C_IsDeviceReady(Handle->HI2c, Handle->Address, 2, 100) == HAL_OK)
+		{
+			answer = true;
+		}
+	}
+	while (0);
+
+	return answer;
+}
+#endif
 
 /***********************************************************************************************************/
 
@@ -92,6 +118,9 @@ bool EE24_Write(EE24_HandleTypeDef *Handle, uint32_t Address, uint8_t *Data, siz
 	{
 	  uint16_t w;
 	  uint32_t startTime = HAL_GetTick();
+#if EE24_USE_WP_PIN == true
+	  HAL_GPIO_WritePin(Handle->WpGpio, Handle->WpPin, GPIO_PIN_RESET);
+#endif
 	  while (1)
 	  {
 	    w = EE24_PSIZE - (Address  % EE24_PSIZE);
@@ -100,7 +129,7 @@ bool EE24_Write(EE24_HandleTypeDef *Handle, uint32_t Address, uint8_t *Data, siz
 	    	w = Len;
 	    }
 #if ((EE24_SIZE == EE24_1KBIT) || (EE24_SIZE == EE24_2KBIT))
-        if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_8BIT, Data, Len, Timeout) == HAL_OK)
+        if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address, Address, I2C_MEMADD_SIZE_8BIT, Data, w, Timeout) == HAL_OK)
 #elif (EE24_SIZE == EE24_4KBIT)
         if (HAL_I2C_Mem_Write(Handle->HI2c, Handle->Address | ((Address & 0x0100) >> 7), (Address & 0xff), I2C_MEMADD_SIZE_8BIT, Data, w, Timeout) == HAL_OK)
 #elif (EE24_SIZE == EE24_8KBIT)
@@ -133,6 +162,9 @@ bool EE24_Write(EE24_HandleTypeDef *Handle, uint32_t Address, uint8_t *Data, siz
 	}
 	while (0);
 
+#if EE24_USE_WP_PIN == true
+	  HAL_GPIO_WritePin(Handle->WpGpio, Handle->WpPin, GPIO_PIN_SET);
+#endif
 	EE24_UnLock(Handle);
 	return answer;
 }
