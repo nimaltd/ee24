@@ -9,16 +9,19 @@
   Youtube:    https://www.youtube.com/@nimaltd
   Instagram:  https://instagram.com/github.NimaLTD
 
-  Version:    3.1.0
+  Version:    3.2.0
 
   History:
+              3.2.0
+              - Added ThreadX Configuration
+
               3.1.0
-              - Add WP pin control
+              - Added WP pin control
               - Fix 1Kb and 2Kb memory writing
 
-			        3.0.1
-              - Fix Address 
-                			  
+              3.0.1
+              - Fixed Address
+                        
               3.0.0
               - Rewrite again
               - Support STM32CubeMx Packet installer
@@ -30,41 +33,40 @@ extern "C"
 {
 #endif
 
-#include <stdbool.h>
-#include "NimaLTD.I-CUBE-EE24_conf.h"
-#include "i2c.h"
+/************************************************************************************************************
+**************    Include Headers
+************************************************************************************************************/
 
-#if EE24_CMSIS_RTOS == EE24_CMSIS_RTOS_DISABLE
-#define EE24_Delay(x) HAL_Delay(x)
-#elif EE24_CMSIS_RTOS == EE24_CMSIS_RTOS_V1
-#include "cmsis_os.h"
-#define EE24_Delay(x) osDelay(x)
-#else
-#include "cmsis_os2.h"
-#define EE24_Delay(x) osDelay(x)
-#endif
+#include <stdbool.h>
+#include "i2c.h"
+#include "NimaLTD.I-CUBE-EE24_conf.h"
+
+/************************************************************************************************************
+**************    Public Definitions
+************************************************************************************************************/
 
 #define EE24_ADDRESS_DEFAULT 0xA0
 
-/***********************************************************************************************************/
-/***********************************************************************************************************/
-/***********************************************************************************************************/
+/************************************************************************************************************
+**************    Public struct/enum
+************************************************************************************************************/
 
 typedef struct
 {
-	I2C_HandleTypeDef      *HI2c;
-	uint8_t                Address;
-	uint8_t                Lock;
+  I2C_HandleTypeDef      *HI2c;
+  uint8_t                Address;
+  uint8_t                Lock;
 #if EE24_USE_WP_PIN == true
-	GPIO_TypeDef           *WpGpio;
-	uint16_t                WpPin;
+  GPIO_TypeDef           *WpGpio;
+  uint16_t                WpPin;
 #endif
 
 } EE24_HandleTypeDef;
 
-/***********************************************************************************************************/
-/***********************************************************************************************************/
-/***********************************************************************************************************/
+/************************************************************************************************************
+**************    Public Functions
+************************************************************************************************************/
+
 #if EE24_USE_WP_PIN == false
 bool EE24_Init(EE24_HandleTypeDef *Handle, I2C_HandleTypeDef *HI2c, uint8_t I2CAddress);
 #else
