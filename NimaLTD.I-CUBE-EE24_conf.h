@@ -34,22 +34,23 @@
 #define EE24_256KBIT                          256
 #define EE24_512KBIT                          512
 
-#define EE24_CMSIS_RTOS_DISABLE               0
-#define EE24_CMSIS_RTOS_V1                    1
-#define EE24_CMSIS_RTOS_V2                    2
+#define EE24_RTOS_DISABLE                     0
+#define EE24_RTOS_CMSIS_V1                    1
+#define EE24_RTOS_CMSIS_V2                    2
+#define EE24_RTOS_THREADX                     3
 
 /**
-	MiddleWare name : NimaLTD.I-CUBE-EE24.3.1.0
-	MiddleWare fileName : NimaLTD.I-CUBE-EE24_conf.h
+	MiddleWare name : NimaLTD.I-CUBE-EE24.3.2.0
+	MiddleWare fileName : ./NimaLTD.I-CUBE-EE24_conf.h
 */
 /*---------- EE24_SIZE  -----------*/
-#define EE24_SIZE      EE24_8KBIT
+#define EE24_SIZE      EE24_1KBIT
 
-/*---------- EE24_CMSIS_RTOS  -----------*/
-#define EE24_CMSIS_RTOS      EE24_CMSIS_RTOS_DISABLE
+/*---------- EE24_RTOS  -----------*/
+#define EE24_RTOS      EE24_RTOS_DISABLE
 
 /*---------- EE24_USE_WP_PIN  -----------*/
-#define EE24_USE_WP_PIN      true
+#define EE24_USE_WP_PIN      false
 
 #ifdef __cplusplus
 }
