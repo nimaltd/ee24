@@ -15,9 +15,9 @@
 * Generate code.
 * Define a structure of `EE24_HandleTypeDef`.
 * Call `EE24_Init()` and enjoy.
----
+--- 
 solve F1 i2c problem
-```
+``` c
 
 void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 {
