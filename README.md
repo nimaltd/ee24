@@ -48,7 +48,7 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 }
 ```
 example:
-```
+``` c
 #include "ee24.h"
 
 EE24_HandleTypeDef ee24;
