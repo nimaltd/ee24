@@ -1,70 +1,363 @@
-# 24xx EEPROM library for stm32 HAL
----  
-## Please Do not Forget to get STAR, DONATE and support me on social networks. Thank you. :sparkling_heart:  
----   
--  Author:     Nima Askari  
--  Github:     https://www.github.com/NimaLTD
--  Youtube:    https://www.youtube.com/@nimaltd  
--  LinkedIn:   https://www.linkedin.com/in/nimaltd  
--  Instagram:  https://instagram.com/github.NimaLTD
+# 💾 ee24
+
+[![CI](https://github.com/nimaltd/ee24/actions/workflows/ci.yml/badge.svg)](https://github.com/nimaltd/ee24/actions/workflows/ci.yml)
+[![Stars](https://img.shields.io/github/stars/nimaltd/ee24?style=social)](https://github.com/nimaltd/ee24)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE.md)
+
+A driver for 24xx I2C EEPROMs, from 24C01 to 24C512, written in C for the STM32 HAL.
+
+Read or write any number of bytes at any address, and the library deals with the rest: pages, blocks, the chip's write time, and the limits of the HAL. It works on any STM32 family, bare metal or with FreeRTOS or ThreadX.
+
 ---
-* Install Library from https://github.com/nimaltd/STM32-PACK/raw/main/EE24/NimaLTD.I-CUBE-EE24.pdsc
-* Add and enable it.
-* Enable I2C.
-* Select 'Generate peripheral initialization as a pair of .c/.h files per peripheral' on the Code Generator Tab.
-* Generate code.
-* Define a structure of `EE24_HandleTypeDef`.
-* Call `EE24_Init()` and enjoy.
---- 
-solve F1 i2c problem
-``` c
 
-void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
-{
+## ✨ What you get
 
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  if(i2cHandle->Instance==I2C2)
-  {
-  /* USER CODE BEGIN I2C2_MspInit 0 */
-   __HAL_RCC_I2C2_CLK_ENABLE();  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<  add manualy
-  /* USER CODE END I2C2_MspInit 0 */
-  
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    /**I2C2 GPIO Configuration    
-    PB10     ------> I2C2_SCL
-    PB11     ------> I2C2_SDA 
-    */
-    GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_11;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+- Any length at any address. Page boundaries, the 256 byte blocks of the small
+  chips and the 64 KB HAL limit are all handled for you
+- Every size from 24C01 to 24C512, chosen per chip, so two different chips can
+  share one project
+- Writes wait only as long as the chip needs, by asking it every millisecond,
+  instead of a fixed 10 ms a page
+- An optional write protect pin, lifted only while a write runs
+- FreeRTOS, through CMSIS-RTOS v1 or v2, and ThreadX: a mutex per chip, and
+  waits that let your other threads run
+- A read or write past the end of the chip is refused, never wrapped round to
+  overwrite the start
+- Unit tested on every commit, against a model of the chip
 
-    /* I2C2 clock enable */
-    __HAL_RCC_I2C2_CLK_ENABLE();
-  /* USER CODE BEGIN I2C2_MspInit 1 */
+---
 
-  /* USER CODE END I2C2_MspInit 1 */
-  }
-}
+## 🔌 Supported chips
+
+Any 24xx serial EEPROM with an I2C bus: Microchip 24LC and 24AA, Atmel/Microchip AT24C, ST M24, onsemi CAT24, and the many compatible parts. Tell `ee24_init()` the number in the part name, in kilobits:
+
+| Chip | `size_kbit` | Bytes |
+|---|---|---|
+| 24C01 | `1` | 128 |
+| 24C02 | `2` | 256 |
+| 24C04 | `4` | 512 |
+| 24C08 | `8` | 1 KB |
+| 24C16 | `16` | 2 KB |
+| 24C32 | `32` | 4 KB |
+| 24C64 | `64` | 8 KB |
+| 24C128 | `128` | 16 KB |
+| 24C256 | `256` | 32 KB |
+| 24C512 | `512` | 64 KB |
+
+1 Mbit parts such as the 24LC1025 and M24M01 are not supported: each maker puts the top address bit in a different place.
+
+---
+
+## 📁 Layout
+
 ```
-example:
-``` c
+src/    ee24.h, ee24.c, ee24_config.h
+test/   host unit tests, run on a PC
+```
+
+Installed into a project, the code keeps its `src/` folder, with your `ee24_config.h`
+beside `ee24.h`, and the README, changelog and licence files around it. There is no
+`test/`: the section below about the tests refers to this repository, not to an
+installed copy.
+
+---
+
+## ⚙️ Installing it
+
+[stm32-installer](https://github.com/nimaltd/stm32-installer) copies the library into your project, creates your `ee24_config.h`, and adds it to your CMake, STM32CubeIDE, Keil, IAR or Makefile project for you. Your project file is backed up first. It also checks that I2C is enabled in your CubeMX project, and says so if it is not.
+
+Install it once per machine:
+
+```bash
+pip install stm32-installer
+```
+
+Then, from the root of your STM32 project:
+
+```bash
+stm32-installer nimaltd/ee24
+```
+
+### From a downloaded zip
+
+Downloaded this repository with **Code**, **Download ZIP**? Give the installer the zip in place of `nimaltd/ee24`, with no need to unpack it:
+
+```bash
+stm32-installer D:/Downloads/ee24-master.zip
+```
+
+Only the files the library needs are copied into your project, and the zip is left alone. An unpacked folder works the same way. [stm32-installer's README](https://github.com/nimaltd/stm32-installer#installing-a-library) has every option, and how to install on a machine with no internet at all.
+
+### Updating, and pinning a version
+
+Run the same command again. The code is replaced and your `ee24_config.h` is kept.
+
+By default you get the newest code on `master`. To hold a project on one release, add `--ref` with a tag, a branch or a commit:
+
+```bash
+stm32-installer nimaltd/ee24 --ref v4.0.0
+```
+
+### Or copy the files in by hand
+
+1. Copy `src/ee24.h` into your project's `Core/Inc`
+2. Copy `src/ee24.c` into your project's `Core/Src`
+3. Copy `src/ee24_config.h` into `Core/Inc`
+
+Once you have copied it, that copy is yours. The installer creates it only when it is missing, so updating the library never overwrites a setting you changed.
+
+### Or add the whole repository to a CMake build
+
+If you keep this repository as a submodule rather than installing it:
+
+```cmake
+add_subdirectory(ee24)
+target_link_libraries(${CMAKE_PROJECT_NAME} nimaltd::ee24)
+
+# ee24 is a static library, so it does not inherit your application's include
+# paths and defines, and ee24.h needs main.h and the HAL. A CubeMX project
+# keeps them on the stm32cubemx target.
+target_link_libraries(ee24 PRIVATE stm32cubemx)
+```
+
+The first `target_link_libraries` has no `PRIVATE` on purpose. CubeMX links your application without one, and CMake refuses to mix the two forms on one target. The settings come from `ee24/src/ee24_config.h`, beside `ee24.h`.
+
+`stm32-installer` avoids all of this: it writes an INTERFACE target instead, whose sources compile as part of your own target and inherit everything it has.
+
+---
+
+## 🔧 Configuration
+
+Everything lives in your `ee24_config.h`, and there is one setting, the RTOS your project runs:
+
+```c
+#define EE24_RTOS           EE24_RTOS_NONE
+```
+
+| Value | For |
+|---|---|
+| `EE24_RTOS_NONE` | Bare metal, no RTOS |
+| `EE24_RTOS_CMSIS_V1` | FreeRTOS through CMSIS-RTOS v1, `cmsis_os.h` |
+| `EE24_RTOS_CMSIS_V2` | FreeRTOS through CMSIS-RTOS v2, `cmsis_os2.h` |
+| `EE24_RTOS_THREADX` | ThreadX, `tx_api.h` |
+
+In CubeMX, FreeRTOS asks which CMSIS-RTOS interface to use when you enable it. Pick the same one here. What changes with an RTOS is described [below](#with-an-rtos).
+
+---
+
+## 🚀 Getting started
+
+Enable I2C in CubeMX, then:
+
+```c
 #include "ee24.h"
 
-EE24_HandleTypeDef ee24;
-uint8_t data[1024];
+ee24_t eeprom;
+
 int main(void)
 {
-  ...
-  ...
-  ...
-  if (EE24_Init(&ee24, &hi2c1, EE24_ADDRESS_DEFAULT))
-  {
-    EE24_Read(&ee24, 0, data, 1024, 1000);
-  }
-  while(1)
-  {
-  
-  }
+    /* ... HAL init, MX_I2C1_Init() ... */
+
+    if (ee24_init(&eeprom, &hi2c1, EE24_ADDRESS_DEFAULT, 256, NULL, 0) == EE24_ERR_NONE)
+    {
+        uint8_t data[64];
+
+        ee24_read(&eeprom, 0, data, sizeof(data), 100);
+    }
+
+    while (1)
+    {
+    }
 }
 ```
+
+`256` says the chip is a 24C256. The last two arguments are the write protect pin, `NULL` and `0` when it is not wired to the MCU.
+
+Every function returns `EE24_ERR_NONE` when it worked, which is 0. So check for it by name: `if (ee24_read(...))` would mean "if it failed".
+
+### Keeping settings in it
+
+The usual job for an EEPROM is to keep a few settings over a power cycle. A struct goes in and out as it is:
+
+```c
+typedef struct
+{
+    uint32_t magic;       /* tells a written chip from a new one, which reads 0xFF */
+    uint16_t volume;
+    uint8_t  language;
+} settings_t;
+
+settings_t settings;
+
+void settings_load(void)
+{
+    if ((ee24_read(&eeprom, 0, (uint8_t *)&settings, sizeof(settings), 100) != EE24_ERR_NONE) ||
+        (settings.magic != 0x5E771265))
+    {
+        settings.magic    = 0x5E771265;
+        settings.volume   = 50;
+        settings.language = 0;
+    }
+}
+
+void settings_save(void)
+{
+    ee24_write(&eeprom, 0, (const uint8_t *)&settings, sizeof(settings), 1000);
+}
+```
+
+An EEPROM cell survives around a million writes. That is a lot for a setting a person changes, and not much for something written every second, so save when a value changes, not on a timer.
+
+### The address
+
+`EE24_ADDRESS_DEFAULT` is `0xA0`, for a chip with its A0, A1 and A2 pins tied to ground. Each pin tied high adds to it: A0 adds `0x02`, A1 `0x04` and A2 `0x08`, so up to eight chips can share one bus. The address is in the 8 bit form the HAL uses.
+
+The 24C04, 24C08 and 24C16 use some of those address bits for the memory address instead, so fewer of them fit on one bus, and some makers ignore the pins altogether. Check the datasheet. With every address pin tied to ground, `EE24_ADDRESS_DEFAULT` is right for all of them.
+
+### Write protect
+
+With the WP pin wired to the MCU, set it up in CubeMX as a GPIO output, give it a name such as `EE_WP`, and pass it in:
+
+```c
+ee24_init(&eeprom, &hi2c1, EE24_ADDRESS_DEFAULT, 256, EE_WP_GPIO_Port, EE_WP_Pin);
+```
+
+The chip is protected from `ee24_init()` on. A write lifts the protection only while it runs, and puts it back on every way out, errors included. Not wired, tie WP to ground on the board and pass `NULL` and `0`.
+
+### Timeouts
+
+The last argument of `ee24_read()` and `ee24_write()` is how long the whole call may take, in milliseconds. `HAL_MAX_DELAY` waits as long as it takes.
+
+A read is quick. A write goes a page at a time, 8, 16 or 32 bytes depending on the chip, and each page takes the chip up to 5 ms to store, 10 ms on some older parts. So writing 1 KB to a 24C256 is 32 pages, up to about 160 ms. Give a write plenty of room: when time runs out it stops part way, with the pages before written and the rest not.
+
+### With an RTOS
+
+Set `EE24_RTOS` in your `ee24_config.h` and each chip gets its own mutex, created by `ee24_init()`. Two threads can then use one chip safely: the second waits for the first, and that wait counts against its timeout. While a write waits for the chip, the thread sleeps and your other threads run.
+
+Before the RTOS starts there is only one thread, so nothing is locked and the waits use `HAL_Delay()`. That is what lets you load settings in `main()` before starting the kernel. With ThreadX, call everything from a thread.
+
+The mutex is per chip, not per bus. Two chips on one bus used from two threads at once would collide on the bus. Usually the HAL refuses the second transfer, which comes back as `EE24_ERR_I2C`, but that is luck rather than safety. Use both chips from one thread, or guard the bus with a mutex of your own.
+
+### What is safe to call from an interrupt
+
+Nothing. A read waits on the bus, a write waits for the chip for milliseconds at a time, and with an RTOS both take a mutex. Hand the work to a task or to the main loop instead, for example with [seq](https://github.com/nimaltd/seq).
+
+---
+
+## 🧰 API
+
+| Function | What it does |
+|---|---|
+| `ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_address, uint16_t size_kbit, GPIO_TypeDef *wp_port, uint16_t wp_pin)` | Set up a handle for one chip and check that it answers. Call it once per handle |
+| `ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len, uint32_t timeout_ms)` | Read `len` bytes from `address` |
+| `ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len, uint32_t timeout_ms)` | Write `len` bytes to `address`, and wait until the chip has stored them |
+
+| Error | Means |
+|---|---|
+| `EE24_ERR_NONE` | Done |
+| `EE24_ERR_INVALID` | A `NULL` pointer, a size that is not a 24xx size, or a handle `ee24_init()` did not accept |
+| `EE24_ERR_RANGE` | `address + len` runs past the end of the chip. Nothing was sent |
+| `EE24_ERR_I2C` | The chip did not answer, or the transfer failed. Check the wiring, the address and the pull ups |
+| `EE24_ERR_TIMEOUT` | Time ran out, waiting for the chip or for another thread |
+| `EE24_ERR_MUTEX` | The RTOS could not create the mutex, usually a heap that is too small, or refused it, as from an interrupt |
+
+When `ee24_init()` fails, the handle is refused by `ee24_read()` and `ee24_write()` until a later `ee24_init()` succeeds.
+
+---
+
+## 🧪 Running the tests
+
+The tests run on your PC, not on hardware. The HAL calls land on a model of a 24xx chip that behaves as the datasheets describe: a write wraps inside its page, a busy chip does not answer, and WP blocks writes. Time is faked, so a write cycle is tested instantly. You need cmake and any C compiler, nothing else: [Unity](https://github.com/ThrowTheSwitch/Unity) is vendored into `test/unity/`, so there is nothing to install.
+
+One command does everything:
+
+```bash
+python test/run_tests.py
+```
+
+It configures, builds and runs the suite, then tells you plainly whether it passed. The suite is built four times, once with the shipped `ee24_config.h` and once for each RTOS. Add `--clean` to start from an empty build folder.
+
+If you prefer doing it by hand:
+
+```bash
+cmake -S . -B build -DEE24_BUILD_TESTS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+---
+
+## ⬆️ Coming from version 3
+
+The CubeMX pack is replaced by stm32-installer, and every name changed:
+
+| Was | Is now |
+|---|---|
+| `EE24_HandleTypeDef` | `ee24_t` |
+| `EE24_Init(&h, &hi2c1, address)` | `ee24_init(&h, &hi2c1, address, size_kbit, wp_port, wp_pin)` |
+| `EE24_Read(...)`, `EE24_Write(...)` | `ee24_read(...)`, `ee24_write(...)`, same arguments |
+| `NimaLTD.I-CUBE-EE24_conf.h` | `ee24_config.h` |
+| `EE24_SIZE` | the `size_kbit` argument of `ee24_init()` |
+| `EE24_USE_WP_PIN` | the `wp_port` and `wp_pin` arguments |
+| `EE24_RTOS_DISABLE` | `EE24_RTOS_NONE` |
+
+The one to watch: the functions used to return `true` when they worked, and now return `EE24_ERR_NONE`, which is 0. The compiler finds every renamed function for you, but not this:
+
+```c
+if (EE24_Read(&ee24, 0, data, 16, 100))                   /* was */
+if (ee24_read(&ee24, 0, data, 16, 100) == EE24_ERR_NONE)  /* is now */
+if (ee24_read(&ee24, 0, data, 16, 100))                   /* compiles, and means "if it failed" */
+```
+
+You also no longer need CubeMX's "Generate peripheral initialization as a pair of .c/.h files per peripheral": `ee24.h` includes `main.h` now, not `i2c.h`.
+
+---
+
+## 🛠️ Troubleshooting
+
+**`ee24_init()` returns `EE24_ERR_I2C`.** The chip did not acknowledge its address. Check SDA and SCL, the pull up resistors (4.7k to the supply is usual), the supply itself, and that the address matches the A0 to A2 pins.
+
+**STM32F1: the I2C bus is busy from the start.** On the F1, CubeMX enables the I2C clock after it sets up the pins, and some parts then start with a stuck bus. Enable the clock first, in the user code block at the top of `HAL_I2C_MspInit()` in `i2c.c` or `stm32f1xx_hal_msp.c`:
+
+```c
+/* USER CODE BEGIN I2C1_MspInit 0 */
+__HAL_RCC_I2C1_CLK_ENABLE();
+/* USER CODE END I2C1_MspInit 0 */
+```
+
+Use `I2C2` in both names for the second bus.
+
+**`EE24_ERR_MUTEX` from `ee24_init()`.** The RTOS could not create the mutex, which almost always means its heap is full. Make `configTOTAL_HEAP_SIZE` bigger in CubeMX's FreeRTOS settings.
+
+---
+
+## 🤝 Contributing
+
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the style rules and how to run the tests. Nothing to sign, just open a pull request.
+
+---
+
+## 💖 Support
+
+I write these libraries in my own time and give them away, because good tools should be easy to get. If this one saved you an afternoon, there are two things that genuinely help:
+
+**⭐ Star the repo.** It costs you one click, it helps other engineers find the library, and it is the main reason I keep going.
+
+**☕ [Buy me a coffee on Ko-fi](https://ko-fi.com/nimaltd).** Any amount is a real motivation to keep writing, documenting and maintaining this work.
+
+[![GitHub](https://img.shields.io/badge/GitHub-Follow-black?style=for-the-badge&logo=github)](https://github.com/NimaLTD)
+[![YouTube](https://img.shields.io/badge/YouTube-Subscribe-red?style=for-the-badge&logo=youtube)](https://youtube.com/@nimaltd)
+[![Instagram](https://img.shields.io/badge/Instagram-Follow-purple?style=for-the-badge&logo=instagram)](https://instagram.com/github.nimaltd)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-blue?style=for-the-badge&logo=linkedin)](https://linkedin.com/in/nimaltd)
+[![Email](https://img.shields.io/badge/Email-Contact-red?style=for-the-badge&logo=gmail)](mailto:nima.askari@gmail.com)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-orange?style=for-the-badge&logo=ko-fi)](https://ko-fi.com/nimaltd)
+
+---
+
+## 📜 License
+
+Apache License 2.0. See [LICENSE.md](LICENSE.md).
+
+You are free to use this in commercial and closed source products. What the license asks in return is that you keep the copyright notice and pass along the [NOTICE](NOTICE) file, so the credit travels with the code.
+
+The test folder vendors [Unity](https://github.com/ThrowTheSwitch/Unity) under its own MIT license, kept in [test/unity/LICENSE.txt](test/unity/LICENSE.txt). It is only used for testing and is not part of what you flash to a device.
