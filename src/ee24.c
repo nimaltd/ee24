@@ -88,99 +88,26 @@ static const osMutexAttr_t ee24_mutex_attr = { "ee24", osMutexPrioInherit, NULL,
  * ****************************************************************************************************
 */
 
-/*****************************************************************************************************/
-/**
- * @brief Size of the chip in bytes, or 0 for a size that does not exist.
- */
-static uint32_t ee24_size_bytes(uint16_t size_kbit);
-
-/*****************************************************************************************************/
-/**
- * @brief How many bytes one write may carry without wrapping inside a page.
- */
-static uint32_t ee24_page_size(uint16_t size_kbit);
-
-/*****************************************************************************************************/
-/**
- * @brief How many bytes one read may carry.
- */
-static uint32_t ee24_read_size(uint16_t size_kbit);
-
-/*****************************************************************************************************/
-/**
- * @brief Check the arguments every read and write share.
- */
-static ee24_err_t ee24_check(const ee24_t *handle, uint32_t address, const void *data, size_t len);
-
-/*****************************************************************************************************/
-/**
- * @brief How much of what is left fits before the next boundary.
- */
-static uint32_t ee24_chunk(uint32_t address, size_t left, uint32_t boundary);
-
-/*****************************************************************************************************/
-/**
- * @brief Work out the I2C address and memory address for one transfer.
- */
+static uint32_t      ee24_size_bytes(uint16_t size_kbit);
+static uint32_t      ee24_page_size(uint16_t size_kbit);
+static uint32_t      ee24_read_size(uint16_t size_kbit);
+static ee24_err_t    ee24_check(const ee24_t *handle, uint32_t address, const void *data,
+                                size_t len);
+static uint32_t      ee24_chunk(uint32_t address, size_t left, uint32_t boundary);
 static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address);
-
-/*****************************************************************************************************/
-/**
- * @brief Milliseconds left of a timeout that started at start, or 0 once it has run out.
- */
-static uint32_t ee24_remaining(uint32_t start, uint32_t timeout_ms);
-
-/*****************************************************************************************************/
-/**
- * @brief Wait until the chip has stored the page it was just sent.
- */
-static ee24_err_t ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, uint32_t start,
-                                  uint32_t timeout_ms);
-
-/*****************************************************************************************************/
-/**
- * @brief Drive the write protect pin, when there is one.
- */
-static void ee24_write_protect(const ee24_t *handle, GPIO_PinState state);
-
-/*****************************************************************************************************/
-/**
- * @brief Create the handle's mutex. Does nothing without an RTOS.
- */
-static ee24_err_t ee24_mutex_create(ee24_t *handle);
-
-/*****************************************************************************************************/
-/**
- * @brief Take the handle's mutex, when the RTOS is running.
- */
-static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms);
-
-/*****************************************************************************************************/
-/**
- * @brief Give back what ee24_lock() took.
- */
-static void ee24_unlock(ee24_t *handle);
-
-/*****************************************************************************************************/
-/**
- * @brief Wait EE24_POLL_MS, letting other threads run when there is an RTOS.
- */
-static void ee24_sleep(void);
-
+static uint32_t      ee24_remaining(uint32_t start, uint32_t timeout_ms);
+static ee24_err_t    ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, uint32_t start,
+                                     uint32_t timeout_ms);
+static void          ee24_write_protect(const ee24_t *handle, GPIO_PinState state);
+static ee24_err_t    ee24_mutex_create(ee24_t *handle);
+static ee24_err_t    ee24_lock(ee24_t *handle, uint32_t timeout_ms);
+static void          ee24_unlock(ee24_t *handle);
+static void          ee24_sleep(void);
 #if EE24_RTOS != EE24_RTOS_NONE
-/*****************************************************************************************************/
-/**
- * @brief Whether the RTOS is running, so a thread may block.
- */
-static bool ee24_kernel_running(void);
+static bool          ee24_kernel_running(void);
 #endif
-
 #if (EE24_RTOS == EE24_RTOS_CMSIS_V2) || (EE24_RTOS == EE24_RTOS_THREADX)
-/*****************************************************************************************************/
-/**
- * @brief Turn milliseconds into RTOS ticks, rounding up.
- */
-static uint32_t ee24_ticks(uint32_t ms, uint32_t tick_hz);
+static uint32_t      ee24_ticks(uint32_t ms, uint32_t tick_hz);
 #endif
 
 /*

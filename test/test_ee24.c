@@ -157,80 +157,21 @@ static TX_THREAD test_thread;
  * ****************************************************************************************************
 */
 
-/*****************************************************************************************************/
-/**
- * @brief Put a new chip of the given size on the bus.
- */
-static void chip_reset(uint16_t size_kbit);
-
-/*****************************************************************************************************/
-/**
- * @brief Forget what has happened so far, so a test sees only its own traffic.
- */
-static void counts_clear(void);
-
-/*****************************************************************************************************/
-/**
- * @brief Note something a real chip would have got wrong.
- */
-static void chip_fault(const char *what);
-
-/*****************************************************************************************************/
-/**
- * @brief Start a transfer: count it, spend its bus time, and say whether the chip answers.
- */
-static bool transfer_begins(const I2C_HandleTypeDef *hi2c, uint32_t bytes);
-
-/*****************************************************************************************************/
-/**
- * @brief Whether an I2C address is one of the chip's own.
- */
-static bool chip_addressed(uint16_t dev_address);
-
-/*****************************************************************************************************/
-/**
- * @brief Turn what the HAL was given into an address in the chip.
- */
-static bool chip_decode(uint16_t dev_address, uint16_t mem_address, uint16_t mem_size,
-                        const uint8_t *data, uint16_t size, uint32_t *address);
-
+static void       chip_reset(uint16_t size_kbit);
+static void       counts_clear(void);
+static void       chip_fault(const char *what);
+static bool       transfer_begins(const I2C_HandleTypeDef *hi2c, uint32_t bytes);
+static bool       chip_addressed(uint16_t dev_address);
+static bool       chip_decode(uint16_t dev_address, uint16_t mem_address, uint16_t mem_size,
+                              const uint8_t *data, uint16_t size, uint32_t *address);
 #if EE24_RTOS != EE24_RTOS_NONE
-/*****************************************************************************************************/
-/**
- * @brief Take the fake mutex, keeping count, and give the answer the test chose.
- */
-static take_t mutex_take(bool right_mutex, uint32_t wait);
-
-/*****************************************************************************************************/
-/**
- * @brief Give the fake mutex back, keeping count.
- */
-static void mutex_give(bool right_mutex);
-
-/*****************************************************************************************************/
-/**
- * @brief Sleep on the fake RTOS, moving the clock on.
- */
-static void rtos_sleep(uint32_t ticks, uint32_t us);
+static take_t     mutex_take(bool right_mutex, uint32_t wait);
+static void       mutex_give(bool right_mutex);
+static void       rtos_sleep(uint32_t ticks, uint32_t us);
 #endif
-
-/*****************************************************************************************************/
-/**
- * @brief Put a new chip on the bus and hand it to ee24_init().
- */
 static ee24_err_t init_chip(uint16_t size_kbit, bool with_wp);
-
-/*****************************************************************************************************/
-/**
- * @brief Fill pattern with bytes that do not repeat on any page or block boundary.
- */
-static void pattern_fill(uint32_t seed);
-
-/*****************************************************************************************************/
-/**
- * @brief Sleeps of either kind, since which one is used depends on the build.
- */
-static int sleeps(void);
+static void       pattern_fill(uint32_t seed);
+static int        sleeps(void);
 
 /*
  * ****************************************************************************************************
