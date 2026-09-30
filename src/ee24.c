@@ -120,28 +120,13 @@ static uint32_t      ee24_ticks(uint32_t ms, uint32_t tick_hz);
 /**
  * @brief Set up a handle for one chip and check that the chip answers.
  *
- * The size is the number in the part name, in kilobits: 2 for a 24C02, 256 for
- * a 24C256. It decides how addresses are sent and how big a write can be, so
- * it has to match the chip. The write protect pin is driven high here, which
- * protects the chip, and is pulled low only while a write runs. Pass NULL and
- * 0 when WP is not wired to the MCU, and tie it to ground on the board.
- *
- * Call it once per handle. With an RTOS it creates the handle's mutex, and a
- * second call would create a second one. The mutex is made only once the chip
- * has answered, so calling it again after a failure is fine.
- *
- * @param[out] handle       Handle to set up. Must not be NULL.
- * @param[in]  hi2c         The I2C bus the chip is on. Must not be NULL.
- * @param[in]  dev_address  I2C address in the 8 bit HAL form, EE24_ADDRESS_DEFAULT
- *                          when A0, A1 and A2 are tied to ground.
- * @param[in]  size_kbit    1, 2, 4, 8, 16, 32, 64, 128, 256 or 512.
- * @param[in]  wp_port      Port of the write protect pin, or NULL when not wired.
- * @param[in]  wp_pin       Write protect pin, such as GPIO_PIN_5. Ignored when
- *                          wp_port is NULL.
- * @return EE24_ERR_NONE when the chip answered, EE24_ERR_INVALID for a NULL
- *         pointer or an unknown size, EE24_ERR_I2C when the chip did not answer,
- *         or EE24_ERR_MUTEX when the RTOS could not create the mutex. On any
- *         error the handle is refused by ee24_read() and ee24_write().
+ * @param[out] handle       Handle to set up.
+ * @param[in]  hi2c         I2C bus the chip is on.
+ * @param[in]  dev_address  I2C address in the 8 bit HAL form.
+ * @param[in]  size_kbit    Size from the part name, 256 for a 24C256.
+ * @param[in]  wp_port      Write protect port, or NULL when WP is not wired.
+ * @param[in]  wp_pin       Write protect pin.
+ * @return EE24_ERR_NONE, EE24_ERR_INVALID, EE24_ERR_I2C or EE24_ERR_MUTEX.
  */
 ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_address,
                      uint16_t size_kbit, GPIO_TypeDef *wp_port, uint16_t wp_pin)
@@ -153,10 +138,12 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
 
     if (handle != NULL)
     {
-        /* Cleared first, so a handle whose setup failed half way is refused
-           rather than used. */
+        /* Refused until every step below has worked, so a handle whose setup
+           failed half way is never used. */
         handle->ready = 0U;
 
+        /* A size that is not a 24xx part is refused here, before anything
+           is sent to the bus. */
         if ((hi2c != NULL) && (ee24_size_bytes(size_kbit) != 0U))
         {
             handle->hi2c        = hi2c;
@@ -168,6 +155,7 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
             /* Protected from the start. A write releases it only while it runs. */
             ee24_write_protect(handle, GPIO_PIN_SET);
 
+            /* Does a chip answer at this address? */
             if (HAL_I2C_IsDeviceReady(hi2c, dev_address, EE24_INIT_TRIALS, EE24_INIT_TIMEOUT_MS)
                 != HAL_OK)
             {
@@ -175,9 +163,12 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
             }
             else
             {
+                /* The mutex comes last, so a chip that did not answer leaves no
+                   mutex behind, and calling init again makes only one. */
                 err = ee24_mutex_create(handle);
             }
 
+            /* Only now may ee24_read() and ee24_write() use it. */
             if (err == EE24_ERR_NONE)
             {
                 handle->ready = 1U;
@@ -190,40 +181,32 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
 
 /*****************************************************************************************************/
 /**
- * @brief Read len bytes starting at address.
+ * @brief Read len bytes starting at address. Not from an interrupt.
  *
- * Any length is fine, up to the end of the chip: the read is split wherever the
- * chip or the HAL needs it to be. It blocks until the data is in, or until the
- * timeout runs out. With an RTOS, a thread waiting for another one to finish
- * with the chip counts that wait against the same timeout.
- *
- * Not for use from an interrupt: it waits on the I2C bus, and with an RTOS it
- * takes a mutex.
- *
- * @param[in,out] handle      Handle from ee24_init(). Must not be NULL.
- * @param[in]     address     First byte to read, from 0.
- * @param[out]    data        Where the bytes go. Must not be NULL.
- * @param[in]     len         How many bytes to read. 0 does nothing.
- * @param[in]     timeout_ms  Time allowed for the whole call. HAL_MAX_DELAY waits
- *                            for as long as it takes.
- * @return EE24_ERR_NONE when every byte was read, EE24_ERR_INVALID for a NULL
- *         pointer or a handle ee24_init() did not accept, EE24_ERR_RANGE when
- *         address + len runs past the end of the chip, EE24_ERR_I2C when a
- *         transfer failed, EE24_ERR_TIMEOUT when time ran out, or EE24_ERR_MUTEX
- *         when the RTOS refused the mutex.
+ * @param[in,out] handle      Handle from ee24_init().
+ * @param[in]     address     First byte to read.
+ * @param[out]    data        Where the bytes go.
+ * @param[in]     len         Bytes to read, up to the end of the chip.
+ * @param[in]     timeout_ms  Time for the whole call. HAL_MAX_DELAY waits for ever.
+ * @return EE24_ERR_NONE, or the EE24_ERR_ value that says what went wrong.
  */
 ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len,
                      uint32_t timeout_ms)
 {
+    /* The clock starts now, so a wait for the mutex counts against the
+       timeout as well. Arguments are checked before anything else. */
     uint32_t   start = HAL_GetTick();
     ee24_err_t err   = ee24_check(handle, address, data, len);
 
     if ((err == EE24_ERR_NONE) && (len > 0U))
     {
+        /* One thread at a time. Without an RTOS this does nothing. */
         err = ee24_lock(handle, timeout_ms);
 
         if (err == EE24_ERR_NONE)
         {
+            /* Read in pieces: 24C04 to 24C16 put each 256 byte block at its own
+               I2C address, and the HAL cannot count a whole 24C512 at once. */
             uint32_t limit = ee24_read_size(handle->size_kbit);
             size_t   done  = 0U;
 
@@ -236,12 +219,15 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
 
                 if (left == 0U)
                 {
+                    /* Out of time before the next piece. */
                     err = EE24_ERR_TIMEOUT;
                 }
                 else if (HAL_I2C_Mem_Read(handle->hi2c, target.dev_address, target.mem_address,
                                           target.mem_size, &data[done], (uint16_t)chunk, left)
                          != HAL_OK)
                 {
+                    /* The HAL gets only what is left of the timeout, so the
+                       call as a whole keeps to it. */
                     err = EE24_ERR_I2C;
                 }
                 else
@@ -250,6 +236,7 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
                 }
             }
 
+            /* Give the chip back to other threads, error or not. */
             ee24_unlock(handle);
         }
     }
@@ -259,45 +246,33 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
 
 /*****************************************************************************************************/
 /**
- * @brief Write len bytes starting at address.
+ * @brief Write len bytes starting at address. Not from an interrupt.
  *
- * Any length is fine, up to the end of the chip. The chip stores one page at a
- * time, so the data goes out a page at a time, and after each one the chip is
- * asked every millisecond whether it has finished. When this returns, the chip
- * is ready for the next call.
- *
- * With a write protect pin, the chip is unprotected only while this runs, and
- * protected again on every way out, errors included. With an RTOS, the waits
- * between pages let other threads run.
- *
- * Not for use from an interrupt: a page takes a few milliseconds to store, and
- * with an RTOS it takes a mutex.
- *
- * @param[in,out] handle      Handle from ee24_init(). Must not be NULL.
- * @param[in]     address     First byte to write, from 0.
- * @param[in]     data        The bytes to write. Must not be NULL.
- * @param[in]     len         How many bytes to write. 0 does nothing.
- * @param[in]     timeout_ms  Time allowed for the whole call. HAL_MAX_DELAY waits
- *                            for as long as it takes.
- * @return EE24_ERR_NONE when every byte was stored, EE24_ERR_INVALID for a NULL
- *         pointer or a handle ee24_init() did not accept, EE24_ERR_RANGE when
- *         address + len runs past the end of the chip, EE24_ERR_I2C when a
- *         transfer failed, EE24_ERR_TIMEOUT when time ran out, or EE24_ERR_MUTEX
- *         when the RTOS refused the mutex. After an error, the pages before the
- *         failing one are written and the rest are not.
+ * @param[in,out] handle      Handle from ee24_init().
+ * @param[in]     address     First byte to write.
+ * @param[in]     data        The bytes to write.
+ * @param[in]     len         Bytes to write, up to the end of the chip.
+ * @param[in]     timeout_ms  Time for the whole call. HAL_MAX_DELAY waits for ever.
+ * @return EE24_ERR_NONE, or the EE24_ERR_ value that says what went wrong. After
+ *         an error, the pages before the failing one are written.
  */
 ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len,
                       uint32_t timeout_ms)
 {
+    /* The clock starts now, so a wait for the mutex counts against the
+       timeout as well. Arguments are checked before anything else. */
     uint32_t   start = HAL_GetTick();
     ee24_err_t err   = ee24_check(handle, address, data, len);
 
     if ((err == EE24_ERR_NONE) && (len > 0U))
     {
+        /* One thread at a time. Without an RTOS this does nothing. */
         err = ee24_lock(handle, timeout_ms);
 
         if (err == EE24_ERR_NONE)
         {
+            /* Write a page at a time. Sent more than a page, the chip wraps
+               round inside it and overwrites what it has just been given. */
             uint32_t page = ee24_page_size(handle->size_kbit);
             size_t   done = 0U;
 
@@ -316,6 +291,7 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
 
                 if (left == 0U)
                 {
+                    /* Out of time before the next page. */
                     err = EE24_ERR_TIMEOUT;
                 }
                 else if (HAL_I2C_Mem_Write(handle->hi2c, target.dev_address, target.mem_address,
@@ -327,12 +303,14 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
                 else
                 {
                     /* The chip stores the page after the transfer ends, and does
-                       not answer anything until it has. */
+                       not answer anything until it has. So the next page, or
+                       the caller's next call, waits for it here. */
                     err = ee24_wait_ready(handle, target.dev_address, start, timeout_ms);
                     done += chunk;
                 }
             }
 
+            /* Protected again and given back on every way out, errors included. */
             ee24_write_protect(handle, GPIO_PIN_SET);
             ee24_unlock(handle);
         }
@@ -351,16 +329,15 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
 /**
  * @brief Size of the chip in bytes, or 0 for a size that does not exist.
  *
- * Doubles as the check on size_kbit, so a mistyped size such as 250 is refused
- * by ee24_init() rather than used.
- *
- * @param[in] size_kbit  Size in kilobits, from the part name.
- * @return The size in bytes, or 0 when size_kbit is not a 24xx size.
+ * @param[in] size_kbit  Size in kilobits.
+ * @return Bytes, or 0.
  */
 static uint32_t ee24_size_bytes(uint16_t size_kbit)
 {
     uint32_t bytes = 0U;
 
+    /* Only the ten sizes a 24xx part comes in, so a mistyped one such as 250
+       is refused by ee24_init() rather than used. A kilobit is 128 bytes. */
     switch (size_kbit)
     {
         case 1U:
@@ -388,13 +365,8 @@ static uint32_t ee24_size_bytes(uint16_t size_kbit)
 /**
  * @brief How many bytes one write may carry without wrapping inside a page.
  *
- * A chip that is sent more than a page wraps round to the start of the same
- * page and overwrites what it has just been given, with nothing reported. From
- * 24C128 up the real page is 64 or 128 bytes. 32 is used there as well, which
- * is always safe because those pages are whole multiples of it, only slower.
- *
  * @param[in] size_kbit  Size in kilobits, already checked.
- * @return The page size in bytes.
+ * @return Page size in bytes.
  */
 static uint32_t ee24_page_size(uint16_t size_kbit)
 {
@@ -402,15 +374,18 @@ static uint32_t ee24_page_size(uint16_t size_kbit)
 
     if (size_kbit <= 2U)
     {
+        /* 24C01 and 24C02. Some makers use 16, but 8 is safe on all of them. */
         page = 8U;
     }
     else if (size_kbit <= 16U)
     {
+        /* 24C04 to 24C16. */
         page = 16U;
     }
     else
     {
-        /* 32 bytes, from 24C32 up. */
+        /* 32 bytes from 24C32 up. From 24C128 the real page is 64 or 128,
+           whole multiples of 32, so 32 is safe there too, only slower. */
     }
 
     return page;
@@ -418,20 +393,19 @@ static uint32_t ee24_page_size(uint16_t size_kbit)
 
 /*****************************************************************************************************/
 /**
- * @brief How many bytes one read may carry.
- *
- * Chips from 24C04 to 24C16 split their memory into 256 byte blocks, each at
- * its own I2C address, so a read stops at the end of a block and the next one
- * starts at the next address. The largest chips are bigger than one HAL
- * transfer can count. Everything else fits in one.
+ * @brief How many bytes one read may carry, as a boundary it must not cross.
  *
  * @param[in] size_kbit  Size in kilobits, already checked.
- * @return The most bytes one read may carry, as a boundary it must not cross.
+ * @return The boundary in bytes.
  */
 static uint32_t ee24_read_size(uint16_t size_kbit)
 {
+    /* The HAL counts a transfer in 16 bits, so a 24C512, 64 KB, is read in
+       two halves. Every smaller chip fits in one. */
     uint32_t limit = EE24_READ_LIMIT;
 
+    /* 24C04 to 24C16 put each 256 byte block at its own I2C address, so a
+       read must stop at the end of a block. */
     if ((size_kbit >= 4U) && (size_kbit <= 16U))
     {
         limit = EE24_BLOCK_SIZE;
@@ -448,9 +422,7 @@ static uint32_t ee24_read_size(uint16_t size_kbit)
  * @param[in] address  First byte of the transfer.
  * @param[in] data     The caller's buffer.
  * @param[in] len      Length of the transfer.
- * @return EE24_ERR_NONE when the transfer can go ahead, EE24_ERR_INVALID for a
- *         NULL pointer or a handle that is not ready, or EE24_ERR_RANGE when the
- *         transfer runs past the end of the chip.
+ * @return EE24_ERR_NONE, EE24_ERR_INVALID or EE24_ERR_RANGE.
  */
 static ee24_err_t ee24_check(const ee24_t *handle, uint32_t address, const void *data, size_t len)
 {
@@ -459,12 +431,14 @@ static ee24_err_t ee24_check(const ee24_t *handle, uint32_t address, const void 
     assert_param(handle != NULL);
     assert_param(data != NULL);
 
+    /* A handle ee24_init() did not accept is refused like a NULL one. */
     if ((handle != NULL) && (data != NULL) && (handle->ready != 0U))
     {
         uint32_t size = ee24_size_bytes(handle->size_kbit);
 
         /* Written as a subtraction, because address + len can wrap past zero
-           and then look small enough. */
+           and then look small enough. Sent anyway, the chip would wrap round
+           and overwrite its own start. */
         if ((address > size) || (len > (size_t)(size - address)))
         {
             err = EE24_ERR_RANGE;
@@ -482,17 +456,19 @@ static ee24_err_t ee24_check(const ee24_t *handle, uint32_t address, const void 
 /**
  * @brief How much of what is left fits before the next boundary.
  *
- * @param[in] address   Where the transfer starts.
+ * @param[in] address   Where this piece starts.
  * @param[in] left      Bytes still to go.
- * @param[in] boundary  A page or block size. The transfer must not cross a
- *                      multiple of it.
- * @return Bytes for this transfer, at least 1 when left is not 0.
+ * @param[in] boundary  Page or block size.
+ * @return Bytes for this piece.
  */
 static uint32_t ee24_chunk(uint32_t address, size_t left, uint32_t boundary)
 {
+    /* From here to the next boundary, so the first piece of a transfer that
+       starts inside a page only fills the rest of that page. */
     uint32_t room  = boundary - (address % boundary);
     uint32_t chunk = room;
 
+    /* Or less, when that is all there is left. */
     if (left < (size_t)room)
     {
         chunk = (uint32_t)left;
@@ -505,14 +481,9 @@ static uint32_t ee24_chunk(uint32_t address, size_t left, uint32_t boundary)
 /**
  * @brief Work out the I2C address and memory address for one transfer.
  *
- * From 24C32 up the memory address goes out as two bytes. Below that it is one
- * byte, which reaches 256 bytes, and chips from 24C04 to 24C16 take the higher
- * bits in the I2C address, where A0 to A2 would otherwise be. Bit 8 of the
- * memory address lands in bit 1 of the 8 bit I2C address, and so on up.
- *
  * @param[in] handle   Handle of the chip.
- * @param[in] address  Memory address, already checked against the size.
- * @return Everything the HAL needs to reach that address.
+ * @param[in] address  Memory address, already checked.
+ * @return What the HAL needs to reach that address.
  */
 static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address)
 {
@@ -520,12 +491,17 @@ static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address)
 
     if (handle->size_kbit >= 32U)
     {
+        /* From 24C32 up the memory address goes out as two bytes. */
         target.dev_address = handle->dev_address;
         target.mem_address = (uint16_t)address;
         target.mem_size    = (uint16_t)I2C_MEMADD_SIZE_16BIT;
     }
     else
     {
+        /* Below that it is one byte, which reaches 256 bytes. 24C04 to 24C16
+           take the higher bits in the I2C address, where A0 to A2 would be:
+           bit 8 of the memory address lands in bit 1 of the 8 bit I2C address,
+           and so on up. On a 24C01 or 24C02 those bits are always 0. */
         target.dev_address = (uint16_t)(handle->dev_address | ((address >> 7U) & 0x0EU));
         target.mem_address = (uint16_t)(address & 0xFFU);
         target.mem_size    = (uint16_t)I2C_MEMADD_SIZE_8BIT;
@@ -536,17 +512,15 @@ static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address)
 
 /*****************************************************************************************************/
 /**
- * @brief Milliseconds left of a timeout that started at start.
- *
- * Each HAL call is given what is left rather than the whole timeout, so the
- * timeout holds for the call as a whole however many transfers it takes.
+ * @brief Milliseconds left of a timeout.
  *
  * @param[in] start       HAL_GetTick() when the call began.
  * @param[in] timeout_ms  The caller's timeout.
- * @return Milliseconds left, or 0 once the timeout has run out.
+ * @return Milliseconds left, or 0 once it has run out.
  */
 static uint32_t ee24_remaining(uint32_t start, uint32_t timeout_ms)
 {
+    /* A subtraction, which stays right when the tick wraps after 49 days. */
     uint32_t elapsed = HAL_GetTick() - start;
     uint32_t left    = 0U;
 
@@ -562,17 +536,11 @@ static uint32_t ee24_remaining(uint32_t start, uint32_t timeout_ms)
 /**
  * @brief Wait until the chip has stored the page it was just sent.
  *
- * A chip that is busy storing a page does not acknowledge its address, so it
- * is asked every EE24_POLL_MS until it does. That is the method the datasheets
- * give, and it is usually well under the 5 to 10 ms a fixed wait would have to
- * allow. It sleeps before the first question, since no chip stores a page in
- * under a millisecond.
- *
  * @param[in] handle       Handle of the chip.
- * @param[in] dev_address  The I2C address the page went to.
+ * @param[in] dev_address  I2C address the page went to.
  * @param[in] start        HAL_GetTick() when the call began.
- * @param[in] timeout_ms   The caller's timeout, for the whole call.
- * @return EE24_ERR_NONE once the chip answers, or EE24_ERR_TIMEOUT.
+ * @param[in] timeout_ms   The caller's timeout.
+ * @return EE24_ERR_NONE or EE24_ERR_TIMEOUT.
  */
 static ee24_err_t ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, uint32_t start,
                                   uint32_t timeout_ms)
@@ -582,10 +550,16 @@ static ee24_err_t ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, ui
 
     do
     {
+        /* Sleep first: no chip stores a page in under a millisecond, so
+           asking straight away would only waste a question. */
         ee24_sleep();
 
         left = ee24_remaining(start, timeout_ms);
 
+        /* A chip busy storing a page does not acknowledge its address, so an
+           answer means it has finished. This is the method the datasheets
+           give, and it is usually well under the 5 to 10 ms a fixed wait
+           would have to allow. */
         if ((left > 0U) && (HAL_I2C_IsDeviceReady(handle->hi2c, dev_address, 1U, left) == HAL_OK))
         {
             err = EE24_ERR_NONE;
@@ -605,6 +579,7 @@ static ee24_err_t ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, ui
  */
 static void ee24_write_protect(const ee24_t *handle, GPIO_PinState state)
 {
+    /* NULL means WP is not wired to the MCU, so there is nothing to drive. */
     if (handle->wp_port != NULL)
     {
         HAL_GPIO_WritePin(handle->wp_port, handle->wp_pin, state);
@@ -615,17 +590,15 @@ static void ee24_write_protect(const ee24_t *handle, GPIO_PinState state)
 /**
  * @brief Create the handle's mutex. Does nothing without an RTOS.
  *
- * With CMSIS-RTOS the mutex comes from the RTOS heap, so a heap that is too
- * small shows up here as EE24_ERR_MUTEX.
- *
  * @param[in,out] handle  Handle of the chip.
- * @return EE24_ERR_NONE, or EE24_ERR_MUTEX when the RTOS could not create it.
+ * @return EE24_ERR_NONE or EE24_ERR_MUTEX.
  */
 static ee24_err_t ee24_mutex_create(ee24_t *handle)
 {
     ee24_err_t err = EE24_ERR_NONE;
 
 #if EE24_RTOS == EE24_RTOS_CMSIS_V1
+    /* From the RTOS heap, so NULL most often means the heap is too small. */
     handle->mutex = osMutexCreate(osMutex(ee24_mutex));
 
     if (handle->mutex == NULL)
@@ -633,6 +606,7 @@ static ee24_err_t ee24_mutex_create(ee24_t *handle)
         err = EE24_ERR_MUTEX;
     }
 #elif EE24_RTOS == EE24_RTOS_CMSIS_V2
+    /* From the RTOS heap, so NULL most often means the heap is too small. */
     handle->mutex = osMutexNew(&ee24_mutex_attr);
 
     if (handle->mutex == NULL)
@@ -640,6 +614,9 @@ static ee24_err_t ee24_mutex_create(ee24_t *handle)
         err = EE24_ERR_MUTEX;
     }
 #elif EE24_RTOS == EE24_RTOS_THREADX
+    /* Inside the handle, so no heap is needed. Priority inheritance, so a low
+       priority thread in the middle of a write is not held up by a medium one
+       while a high priority thread waits for the chip. */
     if (tx_mutex_create(&handle->mutex, (CHAR *)"ee24", TX_INHERIT) != TX_SUCCESS)
     {
         err = EE24_ERR_MUTEX;
@@ -655,21 +632,17 @@ static ee24_err_t ee24_mutex_create(ee24_t *handle)
 /**
  * @brief Take the handle's mutex, when the RTOS is running.
  *
- * Before the RTOS starts there is only one thread of execution, so there is
- * nothing to guard against, and blocking would not work yet anyway. That is
- * what lets a project read its settings from the chip in main() before it
- * starts the RTOS.
- *
  * @param[in,out] handle      Handle of the chip.
- * @param[in]     timeout_ms  How long to wait for another thread to finish.
- * @return EE24_ERR_NONE, EE24_ERR_TIMEOUT when another thread held it for too
- *         long, or EE24_ERR_MUTEX for any other refusal, such as a call from
- *         an interrupt.
+ * @param[in]     timeout_ms  How long to wait for another thread.
+ * @return EE24_ERR_NONE, EE24_ERR_TIMEOUT or EE24_ERR_MUTEX.
  */
 static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms)
 {
     ee24_err_t err = EE24_ERR_NONE;
 
+    /* Before the RTOS starts there is only main(), so nothing to guard
+       against, and blocking would not work yet anyway. That is what lets a
+       project read its settings from the chip before it starts the RTOS. */
 #if EE24_RTOS == EE24_RTOS_CMSIS_V1
     if (ee24_kernel_running())
     {
@@ -679,10 +652,12 @@ static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms)
 
         if ((status == osErrorTimeoutResource) || (status == osErrorResource))
         {
+            /* Another thread kept it for the whole wait. */
             err = EE24_ERR_TIMEOUT;
         }
         else if (status != osOK)
         {
+            /* Refused outright, such as from an interrupt. */
             err = EE24_ERR_MUTEX;
         }
         else
@@ -696,6 +671,7 @@ static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms)
         uint32_t   ticks  = osWaitForever;
         osStatus_t status = osError;
 
+        /* HAL_MAX_DELAY waits for ever. Anything else becomes ticks. */
         if (timeout_ms != HAL_MAX_DELAY)
         {
             ticks = ee24_ticks(timeout_ms, osKernelGetTickFreq());
@@ -705,10 +681,12 @@ static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms)
 
         if ((status == osErrorTimeout) || (status == osErrorResource))
         {
+            /* Another thread kept it for the whole wait. */
             err = EE24_ERR_TIMEOUT;
         }
         else if (status != osOK)
         {
+            /* Refused outright, such as from an interrupt. */
             err = EE24_ERR_MUTEX;
         }
         else
@@ -722,6 +700,7 @@ static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms)
         ULONG ticks  = TX_WAIT_FOREVER;
         UINT  status = TX_SUCCESS;
 
+        /* HAL_MAX_DELAY waits for ever. Anything else becomes ticks. */
         if (timeout_ms != HAL_MAX_DELAY)
         {
             ticks = ee24_ticks(timeout_ms, (uint32_t)TX_TIMER_TICKS_PER_SECOND);
@@ -731,10 +710,12 @@ static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms)
 
         if (status == TX_NOT_AVAILABLE)
         {
+            /* Another thread kept it for the whole wait. */
             err = EE24_ERR_TIMEOUT;
         }
         else if (status != TX_SUCCESS)
         {
+            /* Refused outright, such as from an interrupt. */
             err = EE24_ERR_MUTEX;
         }
         else
@@ -754,14 +735,13 @@ static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms)
 /**
  * @brief Give back what ee24_lock() took.
  *
- * Whether the RTOS is running cannot change between the two calls, since
- * starting it never returns to main(), so asking again gives the same answer
- * ee24_lock() acted on.
- *
  * @param[in,out] handle  Handle of the chip.
  */
 static void ee24_unlock(ee24_t *handle)
 {
+    /* The same test ee24_lock() made, and the answer cannot have changed in
+       between, since starting the RTOS never returns to main(). So this gives
+       back exactly what was taken, and nothing when nothing was. */
 #if EE24_RTOS == EE24_RTOS_CMSIS_V1
     if (ee24_kernel_running())
     {
@@ -785,12 +765,12 @@ static void ee24_unlock(ee24_t *handle)
 /*****************************************************************************************************/
 /**
  * @brief Wait EE24_POLL_MS, letting other threads run when there is an RTOS.
- *
- * An RTOS sleeps at least one tick, so with a tick slower than 1 ms the wait
- * is one tick instead.
  */
 static void ee24_sleep(void)
 {
+    /* With the RTOS running the thread sleeps, so other threads run, at least
+       one tick even on a tick slower than 1 ms. Before it starts, and without
+       one, the HAL tick is all there is. */
 #if EE24_RTOS == EE24_RTOS_CMSIS_V1
     if (ee24_kernel_running())
     {
@@ -829,9 +809,6 @@ static void ee24_sleep(void)
 /**
  * @brief Whether the RTOS is running, so a thread may block.
  *
- * For ThreadX that means being called from a thread: before tx_kernel_enter()
- * there is no current thread, and a thread cannot sleep or wait any earlier.
- *
  * @return true once the RTOS is running.
  */
 static bool ee24_kernel_running(void)
@@ -843,6 +820,8 @@ static bool ee24_kernel_running(void)
 #elif EE24_RTOS == EE24_RTOS_CMSIS_V2
     return osKernelGetState() == osKernelRunning;
 #else
+    /* ThreadX has no other way to ask. Before tx_kernel_enter() there is no
+       current thread, and nothing may sleep or wait any earlier. */
     return tx_thread_identify() != TX_NULL;
 #endif
 }
@@ -853,18 +832,18 @@ static bool ee24_kernel_running(void)
 /**
  * @brief Turn milliseconds into RTOS ticks, rounding up.
  *
- * Rounding up keeps a short wait from becoming no wait at all on a slow tick.
- * The result stops one short of the "wait forever" value, so a long finite
- * timeout cannot turn into an endless one.
- *
  * @param[in] ms       Milliseconds.
  * @param[in] tick_hz  The RTOS tick rate.
  * @return The number of ticks.
  */
 static uint32_t ee24_ticks(uint32_t ms, uint32_t tick_hz)
 {
+    /* Rounded up, so a short wait does not become no wait at all on a slow
+       tick. 64 bits, so a long wait cannot overflow on the way. */
     uint64_t ticks = (((uint64_t)ms * tick_hz) + 999U) / 1000U;
 
+    /* One short of the RTOS's "wait for ever", so a long finite timeout
+       cannot turn into an endless one. */
     if (ticks > EE24_TICKS_MAX)
     {
         ticks = EE24_TICKS_MAX;
