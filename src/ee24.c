@@ -22,7 +22,6 @@
 */
 
 #include "ee24.h"
-#include <stdbool.h>
 
 /*
  * ****************************************************************************************************
@@ -45,9 +44,6 @@
    in the I2C address, so one transfer must not cross from one block to the next. */
 #define EE24_BLOCK_SIZE         256U
 
-/* The largest finite RTOS wait. One more is "wait forever" in all three APIs. */
-#define EE24_TICKS_MAX          0xFFFFFFFEU
-
 /*
  * ****************************************************************************************************
  * Types
@@ -68,22 +64,6 @@ typedef struct
 
 /*
  * ****************************************************************************************************
- * Constants
- * ****************************************************************************************************
-*/
-
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-/* One definition serves every chip. With no control block in it, each
-   osMutexCreate() call allocates a mutex of its own. */
-static osMutexDef(ee24_mutex);
-#elif EE24_RTOS == EE24_RTOS_CMSIS_V2
-/* Priority inheritance, so a low priority thread in the middle of a write is
-   not held up by a medium one while a high priority thread waits for the chip. */
-static const osMutexAttr_t ee24_mutex_attr = { "ee24", osMutexPrioInherit, NULL, 0U };
-#endif
-
-/*
- * ****************************************************************************************************
  * Private function prototypes
  * ****************************************************************************************************
 */
@@ -99,16 +79,7 @@ static uint32_t      ee24_remaining(uint32_t start, uint32_t timeout_ms);
 static ee24_err_t    ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, uint32_t start,
                                      uint32_t timeout_ms);
 static void          ee24_write_protect(const ee24_t *handle, GPIO_PinState state);
-static ee24_err_t    ee24_mutex_create(ee24_t *handle);
 static ee24_err_t    ee24_lock(ee24_t *handle, uint32_t timeout_ms);
-static void          ee24_unlock(ee24_t *handle);
-static void          ee24_sleep(void);
-#if EE24_RTOS != EE24_RTOS_NONE
-static bool          ee24_kernel_running(void);
-#endif
-#if (EE24_RTOS == EE24_RTOS_CMSIS_V2) || (EE24_RTOS == EE24_RTOS_THREADX)
-static uint32_t      ee24_ticks(uint32_t ms, uint32_t tick_hz);
-#endif
 
 /*
  * ****************************************************************************************************
@@ -164,8 +135,11 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
             else
             {
                 /* The mutex comes last, so a chip that did not answer leaves no
-                   mutex behind, and calling init again makes only one. */
-                err = ee24_mutex_create(handle);
+                   mutex behind, and calling init again makes only one. Without
+                   an RTOS osal makes nothing, and with one it most often fails
+                   for a heap that is too small. */
+                err = (osal_mutex_create(&handle->mutex) == OSAL_ERR_NONE) ? EE24_ERR_NONE
+                                                                           : EE24_ERR_MUTEX;
             }
 
             /* Only now may ee24_read() and ee24_write() use it. */
@@ -237,7 +211,7 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
             }
 
             /* Give the chip back to other threads, error or not. */
-            ee24_unlock(handle);
+            osal_mutex_unlock(&handle->mutex);
         }
     }
 
@@ -312,7 +286,7 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
 
             /* Protected again and given back on every way out, errors included. */
             ee24_write_protect(handle, GPIO_PIN_SET);
-            ee24_unlock(handle);
+            osal_mutex_unlock(&handle->mutex);
         }
     }
 
@@ -551,8 +525,9 @@ static ee24_err_t ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, ui
     do
     {
         /* Sleep first: no chip stores a page in under a millisecond, so
-           asking straight away would only waste a question. */
-        ee24_sleep();
+           asking straight away would only waste a question. With an RTOS
+           other threads run meanwhile, and without one it is HAL_Delay(). */
+        osal_delay_ms(EE24_POLL_MS);
 
         left = ee24_remaining(start, timeout_ms);
 
@@ -588,267 +563,32 @@ static void ee24_write_protect(const ee24_t *handle, GPIO_PinState state)
 
 /*****************************************************************************************************/
 /**
- * @brief Create the handle's mutex. Does nothing without an RTOS.
- *
- * @param[in,out] handle  Handle of the chip.
- * @return EE24_ERR_NONE or EE24_ERR_MUTEX.
- */
-static ee24_err_t ee24_mutex_create(ee24_t *handle)
-{
-    ee24_err_t err = EE24_ERR_NONE;
-
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-    /* From the RTOS heap, so NULL most often means the heap is too small. */
-    handle->mutex = osMutexCreate(osMutex(ee24_mutex));
-
-    if (handle->mutex == NULL)
-    {
-        err = EE24_ERR_MUTEX;
-    }
-#elif EE24_RTOS == EE24_RTOS_CMSIS_V2
-    /* From the RTOS heap, so NULL most often means the heap is too small. */
-    handle->mutex = osMutexNew(&ee24_mutex_attr);
-
-    if (handle->mutex == NULL)
-    {
-        err = EE24_ERR_MUTEX;
-    }
-#elif EE24_RTOS == EE24_RTOS_THREADX
-    /* Inside the handle, so no heap is needed. Priority inheritance, so a low
-       priority thread in the middle of a write is not held up by a medium one
-       while a high priority thread waits for the chip. */
-    if (tx_mutex_create(&handle->mutex, (CHAR *)"ee24", TX_INHERIT) != TX_SUCCESS)
-    {
-        err = EE24_ERR_MUTEX;
-    }
-#else
-    (void)handle;
-#endif
-
-    return err;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Take the handle's mutex, when the RTOS is running.
+ * @brief Take the handle's mutex, and say what went wrong in ee24's terms.
  *
  * @param[in,out] handle      Handle of the chip.
- * @param[in]     timeout_ms  How long to wait for another thread.
+ * @param[in]     timeout_ms  How long to wait for another thread to finish.
  * @return EE24_ERR_NONE, EE24_ERR_TIMEOUT or EE24_ERR_MUTEX.
  */
 static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms)
 {
     ee24_err_t err = EE24_ERR_NONE;
 
-    /* Before the RTOS starts there is only main(), so nothing to guard
-       against, and blocking would not work yet anyway. That is what lets a
-       project read its settings from the chip before it starts the RTOS. */
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-    if (ee24_kernel_running())
+    /* Without an RTOS osal takes nothing and always succeeds. */
+    switch (osal_mutex_lock(&handle->mutex, timeout_ms))
     {
-        /* CMSIS-RTOS v1 waits in milliseconds, and its osWaitForever is the same
-           value as HAL_MAX_DELAY, so the timeout goes in as it is. */
-        osStatus status = osMutexWait(handle->mutex, timeout_ms);
+        case OSAL_ERR_NONE:
+            break;
 
-        if ((status == osErrorTimeoutResource) || (status == osErrorResource))
-        {
-            /* Another thread kept it for the whole wait. */
+        case OSAL_ERR_TIMEOUT:
+            /* Another thread kept the chip for the whole wait. */
             err = EE24_ERR_TIMEOUT;
-        }
-        else if (status != osOK)
-        {
+            break;
+
+        default:
             /* Refused outright, such as from an interrupt. */
             err = EE24_ERR_MUTEX;
-        }
-        else
-        {
-            /* Taken. */
-        }
+            break;
     }
-#elif EE24_RTOS == EE24_RTOS_CMSIS_V2
-    if (ee24_kernel_running())
-    {
-        uint32_t   ticks  = osWaitForever;
-        osStatus_t status = osError;
-
-        /* HAL_MAX_DELAY waits for ever. Anything else becomes ticks. */
-        if (timeout_ms != HAL_MAX_DELAY)
-        {
-            ticks = ee24_ticks(timeout_ms, osKernelGetTickFreq());
-        }
-
-        status = osMutexAcquire(handle->mutex, ticks);
-
-        if ((status == osErrorTimeout) || (status == osErrorResource))
-        {
-            /* Another thread kept it for the whole wait. */
-            err = EE24_ERR_TIMEOUT;
-        }
-        else if (status != osOK)
-        {
-            /* Refused outright, such as from an interrupt. */
-            err = EE24_ERR_MUTEX;
-        }
-        else
-        {
-            /* Taken. */
-        }
-    }
-#elif EE24_RTOS == EE24_RTOS_THREADX
-    if (ee24_kernel_running())
-    {
-        ULONG ticks  = TX_WAIT_FOREVER;
-        UINT  status = TX_SUCCESS;
-
-        /* HAL_MAX_DELAY waits for ever. Anything else becomes ticks. */
-        if (timeout_ms != HAL_MAX_DELAY)
-        {
-            ticks = ee24_ticks(timeout_ms, (uint32_t)TX_TIMER_TICKS_PER_SECOND);
-        }
-
-        status = tx_mutex_get(&handle->mutex, ticks);
-
-        if (status == TX_NOT_AVAILABLE)
-        {
-            /* Another thread kept it for the whole wait. */
-            err = EE24_ERR_TIMEOUT;
-        }
-        else if (status != TX_SUCCESS)
-        {
-            /* Refused outright, such as from an interrupt. */
-            err = EE24_ERR_MUTEX;
-        }
-        else
-        {
-            /* Taken. */
-        }
-    }
-#else
-    (void)handle;
-    (void)timeout_ms;
-#endif
 
     return err;
 }
-
-/*****************************************************************************************************/
-/**
- * @brief Give back what ee24_lock() took.
- *
- * @param[in,out] handle  Handle of the chip.
- */
-static void ee24_unlock(ee24_t *handle)
-{
-    /* The same test ee24_lock() made, and the answer cannot have changed in
-       between, since starting the RTOS never returns to main(). So this gives
-       back exactly what was taken, and nothing when nothing was. */
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-    if (ee24_kernel_running())
-    {
-        (void)osMutexRelease(handle->mutex);
-    }
-#elif EE24_RTOS == EE24_RTOS_CMSIS_V2
-    if (ee24_kernel_running())
-    {
-        (void)osMutexRelease(handle->mutex);
-    }
-#elif EE24_RTOS == EE24_RTOS_THREADX
-    if (ee24_kernel_running())
-    {
-        (void)tx_mutex_put(&handle->mutex);
-    }
-#else
-    (void)handle;
-#endif
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Wait EE24_POLL_MS, letting other threads run when there is an RTOS.
- */
-static void ee24_sleep(void)
-{
-    /* With the RTOS running the thread sleeps, so other threads run, at least
-       one tick even on a tick slower than 1 ms. Before it starts, and without
-       one, the HAL tick is all there is. */
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-    if (ee24_kernel_running())
-    {
-        /* CMSIS-RTOS v1 takes milliseconds. */
-        (void)osDelay(EE24_POLL_MS);
-    }
-    else
-    {
-        HAL_Delay(EE24_POLL_MS);
-    }
-#elif EE24_RTOS == EE24_RTOS_CMSIS_V2
-    if (ee24_kernel_running())
-    {
-        (void)osDelay(ee24_ticks(EE24_POLL_MS, osKernelGetTickFreq()));
-    }
-    else
-    {
-        HAL_Delay(EE24_POLL_MS);
-    }
-#elif EE24_RTOS == EE24_RTOS_THREADX
-    if (ee24_kernel_running())
-    {
-        (void)tx_thread_sleep(ee24_ticks(EE24_POLL_MS, (uint32_t)TX_TIMER_TICKS_PER_SECOND));
-    }
-    else
-    {
-        HAL_Delay(EE24_POLL_MS);
-    }
-#else
-    HAL_Delay(EE24_POLL_MS);
-#endif
-}
-
-#if EE24_RTOS != EE24_RTOS_NONE
-/*****************************************************************************************************/
-/**
- * @brief Whether the RTOS is running, so a thread may block.
- *
- * @return true once the RTOS is running.
- */
-static bool ee24_kernel_running(void)
-{
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-    /* -1 means FreeRTOS was built without a way to tell. Assume running, which
-       is the safe side: the mutex is taken as it always was. */
-    return osKernelRunning() != 0;
-#elif EE24_RTOS == EE24_RTOS_CMSIS_V2
-    return osKernelGetState() == osKernelRunning;
-#else
-    /* ThreadX has no other way to ask. Before tx_kernel_enter() there is no
-       current thread, and nothing may sleep or wait any earlier. */
-    return tx_thread_identify() != TX_NULL;
-#endif
-}
-#endif
-
-#if (EE24_RTOS == EE24_RTOS_CMSIS_V2) || (EE24_RTOS == EE24_RTOS_THREADX)
-/*****************************************************************************************************/
-/**
- * @brief Turn milliseconds into RTOS ticks, rounding up.
- *
- * @param[in] ms       Milliseconds.
- * @param[in] tick_hz  The RTOS tick rate.
- * @return The number of ticks.
- */
-static uint32_t ee24_ticks(uint32_t ms, uint32_t tick_hz)
-{
-    /* Rounded up, so a short wait does not become no wait at all on a slow
-       tick. 64 bits, so a long wait cannot overflow on the way. */
-    uint64_t ticks = (((uint64_t)ms * tick_hz) + 999U) / 1000U;
-
-    /* One short of the RTOS's "wait for ever", so a long finite timeout
-       cannot turn into an endless one. */
-    if (ticks > EE24_TICKS_MAX)
-    {
-        ticks = EE24_TICKS_MAX;
-    }
-
-    return (uint32_t)ticks;
-}
-#endif

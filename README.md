@@ -19,8 +19,9 @@ Read or write any number of bytes at any address, and the library deals with the
 - Writes wait only as long as the chip needs, by asking it every millisecond,
   instead of a fixed 10 ms a page
 - An optional write protect pin, lifted only while a write runs
-- FreeRTOS, through CMSIS-RTOS v1 or v2, and ThreadX: a mutex per chip, and
-  waits that let your other threads run
+- FreeRTOS, through CMSIS-RTOS v1 or v2, and ThreadX, by way of
+  [osal](https://github.com/nimaltd/osal): a mutex per chip, and waits that let your
+  other threads run
 - A read or write past the end of the chip is refused, never wrapped round to
   overwrite the start
 - Unit tested on every commit, against a model of the chip
@@ -51,20 +52,19 @@ Any 24xx serial EEPROM with an I2C bus: Microchip 24LC and 24AA, Atmel/Microchip
 ## 📁 Layout
 
 ```
-src/    ee24.h, ee24.c, ee24_config.h
+src/    ee24.h, ee24.c
 test/   host unit tests, run on a PC
 ```
 
-Installed into a project, the code keeps its `src/` folder, with your `ee24_config.h`
-beside `ee24.h`, and the README, changelog and licence files around it. There is no
-`test/`: the section below about the tests refers to this repository, not to an
-installed copy.
+Installed into a project, the code keeps its `src/` folder, with the README,
+changelog and licence files around it. There is no `test/`: the section below
+about the tests refers to this repository, not to an installed copy.
 
 ---
 
 ## ⚙️ Installing it
 
-[stm32-installer](https://github.com/nimaltd/stm32-installer) copies the library into your project, creates your `ee24_config.h`, and adds it to your CMake, STM32CubeIDE, Keil, IAR or Makefile project for you. Your project file is backed up first. It also checks that I2C is enabled in your CubeMX project, and says so if it is not.
+[stm32-installer](https://github.com/nimaltd/stm32-installer) copies the library into your project and adds it to your CMake, STM32CubeIDE, Keil, IAR or Makefile project for you. Your project file is backed up first. It also checks that I2C is enabled in your CubeMX project, and says so if it is not.
 
 Install it once per machine:
 
@@ -78,6 +78,8 @@ Then, from the root of your STM32 project:
 stm32-installer nimaltd/ee24
 ```
 
+ee24 waits and locks through [osal](https://github.com/nimaltd/osal), so the installer puts osal in first, and asks for its folder like any library. If another library already brought osal into your project, that copy is kept and nothing is asked.
+
 ### From a downloaded zip
 
 Downloaded this repository with **Code**, **Download ZIP**? Give the installer the zip in place of `nimaltd/ee24`, with no need to unpack it:
@@ -86,11 +88,11 @@ Downloaded this repository with **Code**, **Download ZIP**? Give the installer t
 stm32-installer D:/Downloads/ee24-master.zip
 ```
 
-Only the files the library needs are copied into your project, and the zip is left alone. An unpacked folder works the same way. [stm32-installer's README](https://github.com/nimaltd/stm32-installer#installing-a-library) has every option, and how to install on a machine with no internet at all.
+Only the files the library needs are copied into your project, and the zip is left alone. An unpacked folder works the same way. On a machine with no internet, give it the osal zip as well, `stm32-installer D:/Downloads/ee24-master.zip D:/Downloads/osal-master.zip`, so it does not try to fetch osal. [stm32-installer's README](https://github.com/nimaltd/stm32-installer#installing-a-library) has every option, and how to install on a machine with no internet at all.
 
 ### Updating, and pinning a version
 
-Run the same command again. The code is replaced and your `ee24_config.h` is kept.
+Run the same command again. The code is replaced. osal is updated only when ee24 needs a newer one, and your `osal_config.h` is kept either way.
 
 By default you get the newest code on `master`. To hold a project on one release, add `--ref` with a tag, a branch or a commit:
 
@@ -102,15 +104,14 @@ stm32-installer nimaltd/ee24 --ref v4.0.0
 
 1. Copy `src/ee24.h` into your project's `Core/Inc`
 2. Copy `src/ee24.c` into your project's `Core/Src`
-3. Copy `src/ee24_config.h` into `Core/Inc`
-
-Once you have copied it, that copy is yours. The installer creates it only when it is missing, so updating the library never overwrites a setting you changed.
+3. Copy `src/osal.h` and `src/osal_config.h` from [osal](https://github.com/nimaltd/osal) into `Core/Inc`
 
 ### Or add the whole repository to a CMake build
 
 If you keep this repository as a submodule rather than installing it:
 
 ```cmake
+add_subdirectory(osal)     # ee24 needs it, and links it for you
 add_subdirectory(ee24)
 target_link_libraries(${CMAKE_PROJECT_NAME} nimaltd::ee24)
 
@@ -120,7 +121,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME} nimaltd::ee24)
 target_link_libraries(ee24 PRIVATE stm32cubemx)
 ```
 
-The first `target_link_libraries` has no `PRIVATE` on purpose. CubeMX links your application without one, and CMake refuses to mix the two forms on one target. The settings come from `ee24/src/ee24_config.h`, beside `ee24.h`.
+The first `target_link_libraries` has no `PRIVATE` on purpose. CubeMX links your application without one, and CMake refuses to mix the two forms on one target. The RTOS setting comes from `osal/src/osal_config.h`, beside `osal.h`.
 
 `stm32-installer` avoids all of this: it writes an INTERFACE target instead, whose sources compile as part of your own target and inherit everything it has.
 
@@ -128,18 +129,18 @@ The first `target_link_libraries` has no `PRIVATE` on purpose. CubeMX links your
 
 ## 🔧 Configuration
 
-Everything lives in your `ee24_config.h`, and there is one setting, the RTOS your project runs:
+ee24 has no settings file of its own. The one setting is the RTOS your project runs, and it lives in your `osal_config.h`, where every NimaLTD library that uses osal reads it:
 
 ```c
-#define EE24_RTOS           EE24_RTOS_NONE
+#define OSAL_RTOS           OSAL_RTOS_NONE
 ```
 
 | Value | For |
 |---|---|
-| `EE24_RTOS_NONE` | Bare metal, no RTOS |
-| `EE24_RTOS_CMSIS_V1` | FreeRTOS through CMSIS-RTOS v1, `cmsis_os.h` |
-| `EE24_RTOS_CMSIS_V2` | FreeRTOS through CMSIS-RTOS v2, `cmsis_os2.h` |
-| `EE24_RTOS_THREADX` | ThreadX, `tx_api.h` |
+| `OSAL_RTOS_NONE` | Bare metal, no RTOS |
+| `OSAL_RTOS_CMSIS_V1` | FreeRTOS through CMSIS-RTOS v1, `cmsis_os.h` |
+| `OSAL_RTOS_CMSIS_V2` | FreeRTOS through CMSIS-RTOS v2, `cmsis_os2.h` |
+| `OSAL_RTOS_THREADX` | ThreadX, `tx_api.h` |
 
 In CubeMX, FreeRTOS asks which CMSIS-RTOS interface to use when you enable it. Pick the same one here. What changes with an RTOS is described [below](#with-an-rtos).
 
@@ -232,9 +233,22 @@ A read is quick. A write goes a page at a time, 8, 16 or 32 bytes depending on t
 
 ### With an RTOS
 
-Set `EE24_RTOS` in your `ee24_config.h` and each chip gets its own mutex, created by `ee24_init()`. Two threads can then use one chip safely: the second waits for the first, and that wait counts against its timeout. While a write waits for the chip, the thread sleeps and your other threads run.
+Set `OSAL_RTOS` in your `osal_config.h` and each chip gets its own mutex, created by `ee24_init()`. Two threads can then use one chip safely: the second waits for the first, and that wait counts against its timeout. While a write waits for the chip, the thread sleeps and your other threads run.
 
-Before the RTOS starts there is only one thread, so nothing is locked and the waits use `HAL_Delay()`. That is what lets you load settings in `main()` before starting the kernel. With ThreadX, call everything from a thread.
+Start the RTOS first. With one set, call every ee24 function from a thread, `ee24_init()` included, and never from `main()` before the kernel starts: the mutex and the sleeps need a running RTOS. So settings are loaded at the top of your first thread:
+
+```c
+void StartDefaultTask(void *argument)
+{
+    ee24_init(&eeprom, &hi2c1, EE24_ADDRESS_DEFAULT, 256, NULL, 0);
+    settings_load();
+
+    for (;;)
+    {
+        /* ... */
+    }
+}
+```
 
 The mutex is per chip, not per bus. Two chips on one bus used from two threads at once would collide on the bus. Usually the HAL refuses the second transfer, which comes back as `EE24_ERR_I2C`, but that is luck rather than safety. Use both chips from one thread, or guard the bus with a mutex of your own.
 
@@ -275,7 +289,7 @@ One command does everything:
 python test/run_tests.py
 ```
 
-It configures, builds and runs the suite, then tells you plainly whether it passed. The suite is built four times, once with the shipped `ee24_config.h` and once for each RTOS. Add `--clean` to start from an empty build folder.
+It configures, builds and runs the suite, then tells you plainly whether it passed. osal is replaced by a fake the tests control, so a mutex held by another thread, or refused by the RTOS, is tested with no RTOS at all. The RTOS side itself is osal's, and osal's own tests cover it. Add `--clean` to start from an empty build folder.
 
 If you prefer doing it by hand:
 
@@ -296,10 +310,11 @@ The CubeMX pack is replaced by stm32-installer, and every name changed:
 | `EE24_HandleTypeDef` | `ee24_t` |
 | `EE24_Init(&h, &hi2c1, address)` | `ee24_init(&h, &hi2c1, address, size_kbit, wp_port, wp_pin)` |
 | `EE24_Read(...)`, `EE24_Write(...)` | `ee24_read(...)`, `ee24_write(...)`, same arguments |
-| `NimaLTD.I-CUBE-EE24_conf.h` | `ee24_config.h` |
+| `NimaLTD.I-CUBE-EE24_conf.h` | `osal_config.h`, from [osal](https://github.com/nimaltd/osal) |
 | `EE24_SIZE` | the `size_kbit` argument of `ee24_init()` |
 | `EE24_USE_WP_PIN` | the `wp_port` and `wp_pin` arguments |
-| `EE24_RTOS_DISABLE` | `EE24_RTOS_NONE` |
+| `EE24_RTOS` | `OSAL_RTOS` |
+| `EE24_RTOS_DISABLE` | `OSAL_RTOS_NONE` |
 
 The one to watch: the functions used to return `true` when they worked, and now return `EE24_ERR_NONE`, which is 0. The compiler finds every renamed function for you, but not this:
 
@@ -308,6 +323,8 @@ if (EE24_Read(&ee24, 0, data, 16, 100))                   /* was */
 if (ee24_read(&ee24, 0, data, 16, 100) == EE24_ERR_NONE)  /* is now */
 if (ee24_read(&ee24, 0, data, 16, 100))                   /* compiles, and means "if it failed" */
 ```
+
+With an RTOS, ee24 is now called from a thread only, as [above](#with-an-rtos).
 
 You also no longer need CubeMX's "Generate peripheral initialization as a pair of .c/.h files per peripheral": `ee24.h` includes `main.h` now, not `i2c.h`.
 

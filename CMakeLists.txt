@@ -27,6 +27,15 @@ if(DEFINED EE24_CONFIG_DIR)
     target_include_directories(ee24 PUBLIC ${EE24_CONFIG_DIR})
 endif()
 
+# ee24 waits and locks through osal. Add nimaltd/osal to the build as well, with
+# add_subdirectory(osal), before or after this one. The tests use a fake osal
+# instead, which lets them hold or refuse the mutex.
+if(EE24_BUILD_TESTS)
+    target_include_directories(ee24 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/test/fake)
+else()
+    target_link_libraries(ee24 PUBLIC nimaltd::osal)
+endif()
+
 if(EE24_BUILD_TESTS)
     enable_testing()
     add_subdirectory(test)

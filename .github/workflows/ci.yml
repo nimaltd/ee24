@@ -24,19 +24,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ee24 waits and locks through osal, so it is built here against the real
+      # one, from its default branch, which is also what the installer fetches.
+      - name: Fetch osal
+        uses: actions/checkout@v4
+        with:
+          repository: nimaltd/osal
+          path: osal
+
       # Third party action, pinned to the v1.13.0 commit rather than the tag, so
       # the code that runs here cannot change without this line changing.
       - name: Install arm-none-eabi-gcc
         uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c
 
-      # Proves the library builds for the target it is written for, using the
-      # test stubs to stand in for the application's own headers. Once with the
-      # shipped ee24_config.h, then once per RTOS, the way the tests build it.
+      # Proves the library builds for the target it is written for. The test
+      # stubs stand in for the application's main.h, and osal's own stubs for
+      # the RTOS headers. Once with the shipped osal_config.h, then once per
+      # RTOS, the way osal's tests build it.
       - name: Compile
         run: |
           flags="-mcpu=cortex-m4 -mthumb -std=c11 -Wall -Wextra -Wpedantic -Werror -Os"
-          arm-none-eabi-gcc -c src/ee24.c -o /tmp/ee24.o -Itest/stub $flags
+          include="-Itest/stub -Iosal/src -Iosal/test/stub"
+          arm-none-eabi-gcc -c src/ee24.c -o /tmp/ee24.o $include $flags
           for rtos in CMSIS_V1 CMSIS_V2 THREADX; do
-            arm-none-eabi-gcc -c src/ee24.c -o /tmp/ee24_$rtos.o -Itest/stub $flags \
-              -DEE24_CONFIG_H -DEE24_RTOS=EE24_RTOS_$rtos
+            arm-none-eabi-gcc -c src/ee24.c -o /tmp/ee24_$rtos.o $include $flags \
+              -DOSAL_CONFIG_H -DOSAL_RTOS=OSAL_RTOS_$rtos
           done

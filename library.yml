@@ -20,11 +20,12 @@ provides: []
 
 # What the project has to offer before this library works.
 requires:
-  installer: 1.3.0    # the first that installs with the code in src/
-  libraries: []       # other NimaLTD libraries, by name
+  installer: 1.5.0    # the first that installs the libraries listed below
+  libraries:
+    - nimaltd/osal >= 1.0.0   # the mutex and the waits, bare metal or RTOS
   hal: true           # HAL I2C, GPIO and the tick
   cmsis: false
-  rtos: optional      # none, or FreeRTOS or ThreadX, set in ee24_config.h
+  rtos: optional      # none, or FreeRTOS or ThreadX, set in osal_config.h
   hal_modules: [i2c]  # must be enabled in stm32xxxx_hal_conf.h
   peripherals:
     - type: i2c
@@ -41,14 +42,6 @@ files:
     - src/ee24.h
   sources:
     - src/ee24.c
-
-# Copied only when it is not already there, so reinstalling or updating never
-# overwrites what the user changed. Usually the configuration header, but the
-# rule is about who owns the file, not about what is in it. Each entry keeps
-# its own name unless a "to" says otherwise.
-once:
-  - from: src/ee24_config.h
-    to: src/ee24_config.h   # beside ee24.h, which includes it
 
 # Copied as they are, alongside the code.
 extras:

@@ -19,7 +19,9 @@
  *              its page, a busy chip does not answer, WP high blocks writes,
  *              and chips from 24C04 to 24C16 take their block from the I2C
  *              address. Time is a clock the tests move, so a write cycle is
- *              checked instantly. The suite is built once per RTOS setting.
+ *              checked instantly. osal is a fake the tests control, so a
+ *              mutex held by another thread or refused by the RTOS is
+ *              tested here too, with no RTOS at all.
  */
 
 /*
@@ -94,19 +96,6 @@ typedef struct
 
 } fake_chip_t;
 
-/*****************************************************************************************************/
-/**
- * @brief What the fake RTOS answers when ee24 asks for the mutex.
- */
-typedef enum
-{
-    TAKE_OK      = 0, /**< Taken.                                          */
-    TAKE_TIMEOUT = 1, /**< Another thread held it for the whole wait.      */
-    TAKE_BUSY    = 2, /**< Held elsewhere, and no wait was asked for.      */
-    TAKE_REFUSED = 3, /**< Refused outright, as from an interrupt.         */
-
-} take_t;
-
 /*
  * ****************************************************************************************************
  * Global variables
@@ -119,37 +108,23 @@ static I2C_HandleTypeDef test_i2c;
 static GPIO_TypeDef      test_wp_port;
 
 static uint32_t          now_us      = 0U;
-static int               hal_delays  = 0;
 static int               gpio_writes = 0;
 
 static uint8_t           pattern[CHIP_MAX_BYTES];
 static uint8_t           readback[CHIP_MAX_BYTES];
 
-/* The fake kernel. 1 running, 0 not started, -1 cannot tell (CMSIS-RTOS v1). */
-static int32_t           kernel_state       = 1;
-static uint32_t          tick_hz            = 1000U;
-static take_t            take_result        = TAKE_OK;
-static bool              mutex_create_fails = false;
-static bool              mutex_exists       = false;
-static const void        *mutex_created_at  = NULL;
-static int               mutex_creates      = 0;
-static int               mutex_takes        = 0;
-static int               mutex_gives        = 0;
-static int               mutex_held         = 0;
-static uint32_t          mutex_last_wait    = 0U;
-static int               rtos_sleeps        = 0;
-static uint32_t          rtos_last_sleep    = 0U;
-
-#if (EE24_RTOS == EE24_RTOS_CMSIS_V1) || (EE24_RTOS == EE24_RTOS_CMSIS_V2)
-/* What a CMSIS mutex handle points at. */
-struct test_os_mutex
-{
-    int unused;
-};
-static struct test_os_mutex test_mutex_object;
-#elif EE24_RTOS == EE24_RTOS_THREADX
-static TX_THREAD test_thread;
-#endif
+/* The fake osal. */
+static osal_err_t         lock_result        = OSAL_ERR_NONE;
+static uint32_t           lock_wait_ms       = 0U;
+static bool               mutex_create_fails = false;
+static const osal_mutex_t *mutex_created_at  = NULL;
+static int                mutex_creates      = 0;
+static int                mutex_takes        = 0;
+static int                mutex_gives        = 0;
+static int                mutex_held         = 0;
+static uint32_t           mutex_last_wait    = 0U;
+static int                sleeps             = 0;
+static uint32_t           last_sleep_ms      = 0U;
 
 /*
  * ****************************************************************************************************
@@ -164,14 +139,8 @@ static bool       transfer_begins(const I2C_HandleTypeDef *hi2c, uint32_t bytes)
 static bool       chip_addressed(uint16_t dev_address);
 static bool       chip_decode(uint16_t dev_address, uint16_t mem_address, uint16_t mem_size,
                               const uint8_t *data, uint16_t size, uint32_t *address);
-#if EE24_RTOS != EE24_RTOS_NONE
-static take_t     mutex_take(bool right_mutex, uint32_t wait);
-static void       mutex_give(bool right_mutex);
-static void       rtos_sleep(uint32_t ticks, uint32_t us);
-#endif
 static ee24_err_t init_chip(uint16_t size_kbit, bool with_wp);
 static void       pattern_fill(uint32_t seed);
-static int        sleeps(void);
 
 /*
  * ****************************************************************************************************
@@ -192,20 +161,15 @@ uint32_t HAL_GetTick(void)
 
 /*****************************************************************************************************/
 /**
- * @brief Wait, by moving the clock on.
+ * @brief Wait, by moving the clock on. ee24 has to sleep through osal instead.
  *
  * @param[in] Delay  Milliseconds.
  */
 void HAL_Delay(uint32_t Delay)
 {
-#if EE24_RTOS != EE24_RTOS_NONE
-    if (kernel_state != 0)
-    {
-        chip_fault("spun in HAL_Delay() while the RTOS could have run something else");
-    }
-#endif
+    /* With an RTOS this spins, and keeps every other thread waiting. */
+    chip_fault("waited in HAL_Delay() and not through osal");
 
-    hal_delays++;
     now_us += Delay * 1000U;
 }
 
@@ -383,284 +347,105 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin, GPIO_PinState Pin
     }
 }
 
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-/*****************************************************************************************************/
-/**
- * @brief The fake kernel's state, as CMSIS-RTOS v1 reports it.
- */
-int32_t osKernelRunning(void)
-{
-    return kernel_state;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Create the fake mutex, unless the test says the heap is full.
- */
-osMutexId osMutexCreate(const osMutexDef_t *mutex_def)
-{
-    osMutexId id = NULL;
-
-    (void)mutex_def;
-    mutex_creates++;
-
-    if (!mutex_create_fails)
-    {
-        id               = &test_mutex_object;
-        mutex_exists     = true;
-        mutex_created_at = id;
-    }
-
-    return id;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Take the fake mutex, answering as the test chose.
- */
-osStatus osMutexWait(osMutexId mutex_id, uint32_t millisec)
-{
-    osStatus status = osErrorOS;
-
-    switch (mutex_take(mutex_id == &test_mutex_object, millisec))
-    {
-        case TAKE_OK:
-            status = osOK;
-            break;
-
-        case TAKE_TIMEOUT:
-            status = osErrorTimeoutResource;
-            break;
-
-        case TAKE_BUSY:
-            status = osErrorResource;
-            break;
-
-        default:
-            status = osErrorISR;
-            break;
-    }
-
-    return status;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Give the fake mutex back.
- */
-osStatus osMutexRelease(osMutexId mutex_id)
-{
-    mutex_give(mutex_id == &test_mutex_object);
-
-    return osOK;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Sleep, in milliseconds as CMSIS-RTOS v1 counts.
- */
-osStatus osDelay(uint32_t millisec)
-{
-    rtos_sleep(millisec, millisec * 1000U);
-
-    return osOK;
-}
-#elif EE24_RTOS == EE24_RTOS_CMSIS_V2
-/*****************************************************************************************************/
-/**
- * @brief The fake kernel's state, as CMSIS-RTOS v2 reports it.
- */
-osKernelState_t osKernelGetState(void)
-{
-    return (kernel_state != 0) ? osKernelRunning : osKernelReady;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief The fake kernel's tick rate, which the tests can change.
- */
-uint32_t osKernelGetTickFreq(void)
-{
-    return tick_hz;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Create the fake mutex, unless the test says the heap is full.
- */
-osMutexId_t osMutexNew(const osMutexAttr_t *attr)
-{
-    osMutexId_t id = NULL;
-
-    mutex_creates++;
-
-    if ((attr == NULL) || ((attr->attr_bits & osMutexPrioInherit) == 0U))
-    {
-        chip_fault("the mutex was made without priority inheritance");
-    }
-
-    if (!mutex_create_fails)
-    {
-        id               = &test_mutex_object;
-        mutex_exists     = true;
-        mutex_created_at = id;
-    }
-
-    return id;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Take the fake mutex, answering as the test chose.
- */
-osStatus_t osMutexAcquire(osMutexId_t mutex_id, uint32_t timeout)
-{
-    osStatus_t status = osError;
-
-    switch (mutex_take(mutex_id == &test_mutex_object, timeout))
-    {
-        case TAKE_OK:
-            status = osOK;
-            break;
-
-        case TAKE_TIMEOUT:
-            status = osErrorTimeout;
-            break;
-
-        case TAKE_BUSY:
-            status = osErrorResource;
-            break;
-
-        default:
-            status = osErrorISR;
-            break;
-    }
-
-    return status;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Give the fake mutex back.
- */
-osStatus_t osMutexRelease(osMutexId_t mutex_id)
-{
-    mutex_give(mutex_id == &test_mutex_object);
-
-    return osOK;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Sleep, in ticks as CMSIS-RTOS v2 counts.
- */
-osStatus_t osDelay(uint32_t ticks)
-{
-    rtos_sleep(ticks, (uint32_t)(((uint64_t)ticks * 1000000U) / tick_hz));
-
-    return osOK;
-}
-#elif EE24_RTOS == EE24_RTOS_THREADX
-/*****************************************************************************************************/
-/**
- * @brief The calling thread, or TX_NULL before the kernel has started.
- */
-TX_THREAD *tx_thread_identify(VOID)
-{
-    return (kernel_state != 0) ? &test_thread : TX_NULL;
-}
-
 /*****************************************************************************************************/
 /**
  * @brief Create the fake mutex, unless the test says it cannot be made.
+ *
+ * @param[out] mutex  Mutex to create.
+ * @return OSAL_ERR_NONE, or OSAL_ERR_MUTEX when the test says the heap is full.
  */
-UINT tx_mutex_create(TX_MUTEX *mutex_ptr, CHAR *name_ptr, UINT inherit)
+osal_err_t osal_mutex_create(osal_mutex_t *mutex)
 {
-    UINT status = TX_MUTEX_ERROR;
+    osal_err_t err = OSAL_ERR_MUTEX;
 
-    (void)name_ptr;
     mutex_creates++;
-
-    if (inherit != TX_INHERIT)
-    {
-        chip_fault("the mutex was made without priority inheritance");
-    }
 
     if (!mutex_create_fails)
     {
-        mutex_ptr->tx_mutex_id    = 1U;
-        mutex_ptr->tx_mutex_count = 0U;
-        mutex_exists              = true;
-        mutex_created_at          = mutex_ptr;
-        status                    = TX_SUCCESS;
+        mutex_created_at = mutex;
+        err              = OSAL_ERR_NONE;
     }
 
-    return status;
+    return err;
 }
 
 /*****************************************************************************************************/
 /**
- * @brief Take the fake mutex, answering as the test chose.
+ * @brief Take the fake mutex, keeping count, and give the answer the test chose.
+ *
+ * @param[in,out] mutex       Mutex to take.
+ * @param[in]     timeout_ms  The wait it was given.
+ * @return The answer the test chose.
  */
-UINT tx_mutex_get(TX_MUTEX *mutex_ptr, ULONG wait_option)
+osal_err_t osal_mutex_lock(osal_mutex_t *mutex, uint32_t timeout_ms)
 {
-    UINT status = TX_WAIT_ERROR;
-
-    switch (mutex_take(mutex_ptr == mutex_created_at, (uint32_t)wait_option))
+    if ((mutex == NULL) || (mutex != mutex_created_at))
     {
-        case TAKE_OK:
-            status = TX_SUCCESS;
-            break;
-
-        case TAKE_TIMEOUT:
-        case TAKE_BUSY:
-            status = TX_NOT_AVAILABLE;
-            break;
-
-        default:
-            status = TX_WAIT_ERROR;
-            break;
+        chip_fault("asked for a mutex init never made");
     }
 
-    return status;
+    mutex_takes++;
+    mutex_last_wait = timeout_ms;
+
+    /* Another thread had the chip for this long. */
+    now_us += lock_wait_ms * 1000U;
+
+    if (lock_result == OSAL_ERR_NONE)
+    {
+        mutex_held++;
+    }
+
+    return lock_result;
 }
 
 /*****************************************************************************************************/
 /**
- * @brief Give the fake mutex back.
+ * @brief Give the fake mutex back, keeping count.
+ *
+ * @param[in,out] mutex  Mutex to give back.
  */
-UINT tx_mutex_put(TX_MUTEX *mutex_ptr)
+void osal_mutex_unlock(osal_mutex_t *mutex)
 {
-    mutex_give(mutex_ptr == mutex_created_at);
+    if ((mutex == NULL) || (mutex != mutex_created_at))
+    {
+        chip_fault("gave back a mutex init never made");
+    }
 
-    return TX_SUCCESS;
+    if (mutex_held == 0)
+    {
+        chip_fault("gave back a mutex it did not hold");
+    }
+    else
+    {
+        mutex_held--;
+    }
+
+    mutex_gives++;
 }
 
 /*****************************************************************************************************/
 /**
- * @brief Sleep, in ThreadX ticks.
+ * @brief Sleep, by moving the clock on.
+ *
+ * @param[in] ms  Milliseconds.
  */
-UINT tx_thread_sleep(ULONG timer_ticks)
+void osal_delay_ms(uint32_t ms)
 {
-    rtos_sleep((uint32_t)timer_ticks,
-               (uint32_t)(((uint64_t)timer_ticks * 1000000U) / TX_TIMER_TICKS_PER_SECOND));
-
-    return TX_SUCCESS;
+    sleeps++;
+    last_sleep_ms = ms;
+    now_us += ms * 1000U;
 }
-#endif
 
 /*****************************************************************************************************/
 /**
- * @brief Start every test from a new 24C256, a stopped clock and a running kernel.
+ * @brief Start every test from a new 24C256, a stopped clock and a free mutex.
  */
 void setUp(void)
 {
     now_us             = 0U;
-    kernel_state       = 1;
-    tick_hz            = 1000U;
-    take_result        = TAKE_OK;
+    lock_result        = OSAL_ERR_NONE;
+    lock_wait_ms       = 0U;
     mutex_create_fails = false;
-    mutex_exists       = false;
     mutex_created_at   = NULL;
     mutex_creates      = 0;
 
@@ -1016,7 +801,7 @@ void test_the_chip_is_asked_every_millisecond(void)
     /* Three pages, each stored in 3.5 ms, so each is asked about 4 times: at
        1, 2, 3 and 4 ms. Asking less often would wait longer than it needs. */
     TEST_ASSERT_EQUAL_INT_MESSAGE(12, chip.polls, "not asked once a millisecond");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(chip.polls, sleeps(), "asked without sleeping first");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(chip.polls, sleeps, "asked without sleeping first");
 
     for (i = 1; (i < chip.polls) && (i < (int)RECORD_MAX); i++)
     {
@@ -1173,10 +958,9 @@ void test_a_read_leaves_write_protect_alone(void)
     TEST_ASSERT_EQUAL_INT(0, gpio_writes);
 }
 
-#if EE24_RTOS != EE24_RTOS_NONE
 /*****************************************************************************************************/
 /**
- * @brief Init makes one mutex, and only for a chip that answered.
+ * @brief Init makes one mutex, and only for a chip that answers.
  */
 void test_init_makes_one_mutex_for_a_chip_that_answers(void)
 {
@@ -1259,10 +1043,8 @@ void test_a_mutex_held_elsewhere_times_out(void)
 {
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
 
-    take_result = TAKE_TIMEOUT;
+    lock_result = OSAL_ERR_TIMEOUT;
     TEST_ASSERT_EQUAL_INT(EE24_ERR_TIMEOUT, ee24_write(&ee, 0U, pattern, 4U, 100U));
-
-    take_result = TAKE_BUSY;
     TEST_ASSERT_EQUAL_INT(EE24_ERR_TIMEOUT, ee24_read(&ee, 0U, readback, 4U, 0U));
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, chip.transfers, "used the bus without the mutex");
@@ -1277,46 +1059,48 @@ void test_a_refused_mutex_is_reported(void)
 {
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
 
-    take_result = TAKE_REFUSED;
+    lock_result = OSAL_ERR_MUTEX;
     TEST_ASSERT_EQUAL_INT(EE24_ERR_MUTEX, ee24_read(&ee, 0U, readback, 4U, 100U));
+
+    /* osal answers this only for a NULL mutex, which ee24 never passes, but
+       it must not read as success either. */
+    lock_result = OSAL_ERR_INVALID;
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_MUTEX, ee24_write(&ee, 0U, pattern, 4U, 100U));
+
     TEST_ASSERT_EQUAL_INT(0, chip.transfers);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, mutex_gives, "gave back a mutex it never had");
 }
 
 /*****************************************************************************************************/
 /**
- * @brief With the RTOS running, a write sleeps on it rather than spinning.
+ * @brief The wait for the mutex counts against the timeout.
  */
-void test_a_write_sleeps_on_the_rtos(void)
+void test_the_wait_for_the_mutex_counts_against_the_timeout(void)
+{
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
+
+    /* Another thread keeps the chip for 20 ms, the whole timeout. */
+    lock_wait_ms = 20U;
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_TIMEOUT, ee24_read(&ee, 0U, readback, 4U, 20U));
+    TEST_ASSERT_EQUAL_INT(0, chip.transfers);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, mutex_gives, "kept the mutex after running out of time");
+
+    /* One millisecond more, and there is time left to read. */
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0U, readback, 4U, 21U));
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief While a write waits for the chip, it sleeps through osal, a millisecond at a time.
+ */
+void test_a_write_sleeps_through_osal(void)
 {
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 40U, 1000U));
 
-    TEST_ASSERT_TRUE(rtos_sleeps > 0);
-    TEST_ASSERT_EQUAL_INT(0, hal_delays);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, rtos_last_sleep, "a poll should sleep one tick");
+    TEST_ASSERT_TRUE(sleeps > 0);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, last_sleep_ms, "a poll should sleep one millisecond");
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, chip.faults, chip.fault);
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Before the RTOS starts, nothing blocks on it and the data still gets through.
- *
- * The usual case is reading settings in main() before the RTOS is started.
- * There is only one thread then, so there is nothing to lock against, and an
- * RTOS sleep would not work yet.
- */
-void test_before_the_rtos_starts_nothing_blocks_on_it(void)
-{
-    kernel_state = 0;
-
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 7U, pattern, 40U, 1000U));
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 7U, readback, 40U, 1000U));
-
-    TEST_ASSERT_EQUAL_MEMORY(pattern, readback, 40U);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, mutex_takes, "took a mutex before the RTOS ran");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, rtos_sleeps, "slept on an RTOS that was not running");
-    TEST_ASSERT_TRUE(hal_delays > 0);
 }
 
 /*****************************************************************************************************/
@@ -1333,70 +1117,6 @@ void test_the_mutex_wait_follows_the_timeout(void)
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0U, readback, 4U, HAL_MAX_DELAY));
     TEST_ASSERT_EQUAL_HEX32_MESSAGE(0xFFFFFFFFU, mutex_last_wait, "should wait forever");
 }
-#endif
-
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-/*****************************************************************************************************/
-/**
- * @brief When FreeRTOS cannot tell whether it is running, the mutex is taken anyway.
- */
-void test_an_unknown_kernel_state_still_takes_the_mutex(void)
-{
-    kernel_state = -1;
-
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 4U, 100U));
-
-    TEST_ASSERT_EQUAL_INT(1, mutex_takes);
-    TEST_ASSERT_EQUAL_INT(1, mutex_gives);
-}
-#endif
-
-#if EE24_RTOS == EE24_RTOS_CMSIS_V2
-/*****************************************************************************************************/
-/**
- * @brief On a slow tick, a wait rounds up to whole ticks instead of down to none.
- */
-void test_a_slow_tick_rounds_waits_up(void)
-{
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
-    tick_hz = 100U;
-
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 4U, 25U));
-
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(3U, mutex_last_wait, "25 ms at 100 Hz is 3 ticks");
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1U, rtos_last_sleep, "1 ms at 100 Hz is still 1 tick");
-}
-
-/*****************************************************************************************************/
-/**
- * @brief On a fast tick, a millisecond is several ticks.
- */
-void test_a_fast_tick_sleeps_a_whole_millisecond(void)
-{
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
-    tick_hz = 10000U;
-
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 4U, 100U));
-
-    TEST_ASSERT_EQUAL_UINT32(1000U, mutex_last_wait);
-    TEST_ASSERT_EQUAL_UINT32(10U, rtos_last_sleep);
-}
-
-/*****************************************************************************************************/
-/**
- * @brief A long timeout never turns into "wait forever" on the way to ticks.
- */
-void test_a_long_timeout_never_becomes_forever(void)
-{
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
-    tick_hz = 10000U;
-
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0U, readback, 4U, 0xFFFFFFFEU));
-
-    TEST_ASSERT_EQUAL_HEX32(0xFFFFFFFEU, mutex_last_wait);
-}
-#endif
 
 /*****************************************************************************************************/
 /**
@@ -1438,27 +1158,15 @@ int main(void)
     RUN_TEST(test_no_pin_is_touched_without_write_protect);
     RUN_TEST(test_a_read_leaves_write_protect_alone);
 
-#if EE24_RTOS != EE24_RTOS_NONE
     RUN_TEST(test_init_makes_one_mutex_for_a_chip_that_answers);
     RUN_TEST(test_a_mutex_that_cannot_be_made_is_reported);
     RUN_TEST(test_every_call_gives_the_mutex_back);
     RUN_TEST(test_a_bad_argument_takes_no_mutex);
     RUN_TEST(test_a_mutex_held_elsewhere_times_out);
     RUN_TEST(test_a_refused_mutex_is_reported);
-    RUN_TEST(test_a_write_sleeps_on_the_rtos);
-    RUN_TEST(test_before_the_rtos_starts_nothing_blocks_on_it);
+    RUN_TEST(test_the_wait_for_the_mutex_counts_against_the_timeout);
+    RUN_TEST(test_a_write_sleeps_through_osal);
     RUN_TEST(test_the_mutex_wait_follows_the_timeout);
-#endif
-
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-    RUN_TEST(test_an_unknown_kernel_state_still_takes_the_mutex);
-#endif
-
-#if EE24_RTOS == EE24_RTOS_CMSIS_V2
-    RUN_TEST(test_a_slow_tick_rounds_waits_up);
-    RUN_TEST(test_a_fast_tick_sleeps_a_whole_millisecond);
-    RUN_TEST(test_a_long_timeout_never_becomes_forever);
-#endif
 
     return UNITY_END();
 }
@@ -1525,14 +1233,13 @@ static void counts_clear(void)
     chip.reads          = 0;
     chip.polls          = 0;
     chip.writes_ignored = 0;
-    hal_delays          = 0;
     gpio_writes         = 0;
     mutex_takes         = 0;
     mutex_gives         = 0;
     mutex_held          = 0;
     mutex_last_wait     = 0U;
-    rtos_sleeps         = 0;
-    rtos_last_sleep     = 0U;
+    sleeps              = 0;
+    last_sleep_ms       = 0U;
 }
 
 /*****************************************************************************************************/
@@ -1555,8 +1262,8 @@ static void chip_fault(const char *what)
 /**
  * @brief Start a transfer: count it, spend its bus time, and say whether the chip answers.
  *
- * With an RTOS running, every transfer after the mutex exists has to happen
- * while it is held. Init's own question comes before the mutex is made.
+ * Every transfer after the mutex exists has to happen while it is held.
+ * Init's own question comes before the mutex is made.
  *
  * @param[in] hi2c   The handle the transfer was sent on.
  * @param[in] bytes  Bytes on the bus, address included.
@@ -1572,12 +1279,10 @@ static bool transfer_begins(const I2C_HandleTypeDef *hi2c, uint32_t bytes)
         chip_fault("a transfer went to the wrong I2C handle");
     }
 
-#if EE24_RTOS != EE24_RTOS_NONE
-    if ((kernel_state != 0) && mutex_exists && (mutex_held == 0))
+    if ((mutex_created_at != NULL) && (mutex_held == 0))
     {
         chip_fault("a transfer ran without the mutex");
     }
-#endif
 
     return chip.present && (now_us >= chip.busy_until_us);
 }
@@ -1661,78 +1366,6 @@ static bool chip_decode(uint16_t dev_address, uint16_t mem_address, uint16_t mem
     return ok;
 }
 
-#if EE24_RTOS != EE24_RTOS_NONE
-/*****************************************************************************************************/
-/**
- * @brief Take the fake mutex, keeping count, and give the answer the test chose.
- *
- * @param[in] right_mutex  Whether it was asked for the mutex init made.
- * @param[in] wait         The wait it was given, in the RTOS's own unit.
- * @return The answer the test chose.
- */
-static take_t mutex_take(bool right_mutex, uint32_t wait)
-{
-    if (!right_mutex)
-    {
-        chip_fault("asked for a mutex init never made");
-    }
-
-    mutex_takes++;
-    mutex_last_wait = wait;
-
-    if (take_result == TAKE_OK)
-    {
-        mutex_held++;
-    }
-
-    return take_result;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Give the fake mutex back, keeping count.
- *
- * @param[in] right_mutex  Whether it was the mutex init made.
- */
-static void mutex_give(bool right_mutex)
-{
-    if (!right_mutex)
-    {
-        chip_fault("gave back a mutex init never made");
-    }
-
-    if (mutex_held == 0)
-    {
-        chip_fault("gave back a mutex it did not hold");
-    }
-    else
-    {
-        mutex_held--;
-    }
-
-    mutex_gives++;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Sleep on the fake RTOS, moving the clock on.
- *
- * @param[in] ticks  The sleep in the RTOS's own unit, as it was asked for.
- * @param[in] us     The same sleep in microseconds.
- */
-static void rtos_sleep(uint32_t ticks, uint32_t us)
-{
-    if (kernel_state == 0)
-    {
-        chip_fault("slept on an RTOS that was not running");
-    }
-
-    rtos_sleeps++;
-    rtos_last_sleep = ticks;
-    now_us += us;
-}
-#endif
-
 /*****************************************************************************************************/
 /**
  * @brief Put a new chip on the bus and hand it to ee24_init().
@@ -1750,7 +1383,6 @@ static ee24_err_t init_chip(uint16_t size_kbit, bool with_wp)
     chip_reset(size_kbit);
 
     /* A new handle, so the mutex a previous init made is not this one's. */
-    mutex_exists     = false;
     mutex_created_at = NULL;
 
     err = ee24_init(&ee, &test_i2c, EE24_ADDRESS_DEFAULT, size_kbit,
@@ -1777,15 +1409,4 @@ static void pattern_fill(uint32_t seed)
         state      = (state * 1103515245U) + 12345U;
         pattern[i] = (uint8_t)(state >> 16U);
     }
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Sleeps of either kind, since which one is used depends on the build.
- *
- * @return HAL_Delay() calls plus RTOS sleeps.
- */
-static int sleeps(void)
-{
-    return hal_delays + rtos_sleeps;
 }

@@ -27,42 +27,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "ee24_config.h"
 #include "main.h"
-
-/*
- * ****************************************************************************************************
- * Configuration checks
- * ****************************************************************************************************
-*/
-
-/* Checked here and never in ee24_config.h. That file is the user's: it is copied
-   once and never replaced, so a check in it can be edited away and would never
-   reach anyone who installed before it was added. */
-
-/* The values EE24_RTOS can take. They start at 1 on purpose: a misspelt name
-   counts as 0 inside #if, and 0 is then refused below instead of quietly
-   meaning no RTOS. */
-#define EE24_RTOS_NONE      1
-#define EE24_RTOS_CMSIS_V1  2
-#define EE24_RTOS_CMSIS_V2  3
-#define EE24_RTOS_THREADX   4
-
-#ifndef EE24_RTOS
-#error "EE24_RTOS is not defined. Add it to ee24_config.h"
-#elif (EE24_RTOS != EE24_RTOS_NONE) && (EE24_RTOS != EE24_RTOS_CMSIS_V1) && \
-      (EE24_RTOS != EE24_RTOS_CMSIS_V2) && (EE24_RTOS != EE24_RTOS_THREADX)
-#error "EE24_RTOS must be one of the EE24_RTOS_ values listed in ee24_config.h"
-#endif
-
-/* The handle holds the mutex, so its type has to be known here, not only in ee24.c. */
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-#include "cmsis_os.h"
-#elif EE24_RTOS == EE24_RTOS_CMSIS_V2
-#include "cmsis_os2.h"
-#elif EE24_RTOS == EE24_RTOS_THREADX
-#include "tx_api.h"
-#endif
+#include "osal.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -111,13 +77,7 @@ typedef struct
     uint16_t          size_kbit;    /**< Size from the part number, 256 for 24C256. */
     uint8_t           dev_address;  /**< I2C address, in the 8 bit HAL form.        */
     uint8_t           ready;        /**< Set once ee24_init() has succeeded.        */
-#if EE24_RTOS == EE24_RTOS_CMSIS_V1
-    osMutexId         mutex;        /**< Lets one thread use the chip at a time.    */
-#elif EE24_RTOS == EE24_RTOS_CMSIS_V2
-    osMutexId_t       mutex;        /**< Lets one thread use the chip at a time.    */
-#elif EE24_RTOS == EE24_RTOS_THREADX
-    TX_MUTEX          mutex;        /**< Lets one thread use the chip at a time.    */
-#endif
+    osal_mutex_t      mutex;        /**< Lets one thread use the chip at a time.    */
 
 } ee24_t;
 
@@ -130,7 +90,7 @@ typedef struct
 /*****************************************************************************************************/
 /**
  * @brief Set up a handle for one chip and check that the chip answers.
- * @note  Call it once per handle. With an RTOS it creates the handle's mutex.
+ * @note  Call it once per handle. With an RTOS, only from a thread once the RTOS runs.
  */
 ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_address,
                      uint16_t size_kbit, GPIO_TypeDef *wp_port, uint16_t wp_pin);

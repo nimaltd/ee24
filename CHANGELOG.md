@@ -13,13 +13,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   | Was | Is now |
   |---|---|
   | `ee24.h`, `ee24.c` at the top of the repository | `src/ee24.h`, `src/ee24.c` |
-  | `NimaLTD.I-CUBE-EE24_conf.h` | `src/ee24_config.h` |
+  | `NimaLTD.I-CUBE-EE24_conf.h` | `osal_config.h`, from [osal](https://github.com/nimaltd/osal) |
   | `EE24_HandleTypeDef` | `ee24_t` |
   | `EE24_Init(&h, &hi2c1, address)` | `ee24_init(&h, &hi2c1, address, size_kbit, wp_port, wp_pin)` |
   | `EE24_Read(...)`, `EE24_Write(...)` | `ee24_read(...)`, `ee24_write(...)`, same arguments |
   | `EE24_SIZE` in the config | the `size_kbit` argument of `ee24_init()` |
   | `EE24_USE_WP_PIN` in the config | the `wp_port` and `wp_pin` arguments, `NULL` and `0` when not wired |
-  | `EE24_RTOS_DISABLE` | `EE24_RTOS_NONE` |
+  | `EE24_RTOS` | `OSAL_RTOS` |
+  | `EE24_RTOS_DISABLE` | `OSAL_RTOS_NONE` |
 
 - **Every function returns `ee24_err_t` instead of `bool`**, and success is
   `EE24_ERR_NONE`, which is 0. So `if (EE24_Read(...))` becomes
@@ -37,6 +38,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The timeout holds for the whole call: each transfer is given only what is
   left of it. A page of a write used to be given the full timeout on its own.
 - `ee24_write()` takes a pointer to `const` data.
+- The RTOS is reached through [osal](https://github.com/nimaltd/osal), which the installer
+  puts in with ee24, and it is set once in `osal_config.h` for every library
+  that uses osal. With an RTOS, every call has to come from a thread once the
+  RTOS runs, `ee24_init()` included.
 - Installed with [stm32-installer](https://github.com/nimaltd/stm32-installer)
   rather than the STM32CubeMX pack.
 - Licence changed from GPLv2 or commercial to Apache-2.0.
@@ -44,7 +49,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - A real mutex per chip with an RTOS: CMSIS-RTOS v1 and v2 for FreeRTOS, and
-  ThreadX. A thread waiting for another to finish with the chip counts that
+  ThreadX, through osal. A thread waiting for another to finish with the chip counts that
   wait against its timeout, and the waits during a write let other threads run.
 - Error values that say what went wrong: `EE24_ERR_INVALID`, `EE24_ERR_RANGE`,
   `EE24_ERR_I2C`, `EE24_ERR_TIMEOUT` and `EE24_ERR_MUTEX`.
@@ -63,9 +68,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - With `EE24_RTOS_CMSIS_V1` or `V2`, `ee24.c` included `freertos.h`, which does
   not exist on a case sensitive file system such as Linux or macOS. The file is
   `FreeRTOS.h`, and it is no longer included directly.
-- With an RTOS, a write before the kernel started called `osDelay()`, which is
-  not allowed then. Reading settings in `main()` before starting the RTOS now
-  works.
 - A read of a whole 24C512 in one call failed. 64 KB is one more than the HAL
   can count in a transfer, so it was handed a length of 0 and refused.
 - A read or write past the end of the chip wrapped round to its start, and a
