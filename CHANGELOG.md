@@ -53,6 +53,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   wait against its timeout, and the waits during a write let other threads run.
 - Error values that say what went wrong: `EE24_ERR_INVALID`, `EE24_ERR_RANGE`,
   `EE24_ERR_I2C`, `EE24_ERR_TIMEOUT` and `EE24_ERR_MUTEX`.
+- An address for each way the A0, A1 and A2 pins can be wired, from
+  `EE24_ADDRESS_A0` to `EE24_ADDRESS_A0_A1_A2`, beside `EE24_ADDRESS_DEFAULT`.
 - Host unit tests, run against a model of the chip with
   `python test/run_tests.py`.
 - CMake build, and a `library.yml` for installing with stm32-installer, from
@@ -78,3 +80,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   block and address the next one properly.
 - Reading or writing 0 bytes returned failure. It now succeeds and sends
   nothing.
+- On a 24C04, 24C08 or 24C16 given an address with A0, A1 or A2 set where the
+  chip puts its block number, every block was sent to the same wrong one: with
+  A0 on a 24C04, bytes 0 to 255 were read from and written to 256 to 511.
+  `ee24_init()` now ignores those pins, as the chip does.

@@ -69,10 +69,10 @@ typedef struct
 */
 
 static uint32_t      ee24_size_bytes(uint16_t size_kbit);
-static uint32_t      ee24_page_size(uint16_t size_kbit);
-static uint32_t      ee24_read_size(uint16_t size_kbit);
-static ee24_err_t    ee24_check(const ee24_t *handle, uint32_t address, const void *data,
-                                size_t len);
+static uint8_t       ee24_page_size(uint16_t size_kbit);
+static uint16_t      ee24_read_size(uint16_t size_kbit);
+static uint8_t       ee24_block_bits(uint16_t size_kbit);
+static ee24_err_t    ee24_range(const ee24_t *handle, uint32_t address, size_t len);
 static uint32_t      ee24_chunk(uint32_t address, size_t left, uint32_t boundary);
 static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address);
 static uint32_t      ee24_remaining(uint32_t start, uint32_t timeout_ms);
@@ -109,25 +109,44 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
 
     if (handle != NULL)
     {
-        /* Refused until every step below has worked, so a handle whose setup
-           failed half way is never used. */
-        handle->ready = 0U;
+        /* 0 for a size that is not a 24xx part. */
+        uint32_t size = ee24_size_bytes(size_kbit);
+
+        /* A size of 0 marks the handle as not set up, and read and write
+           refuse it. It stays 0 until every step below has worked, so a
+           handle whose setup failed half way is never used. */
+        handle->size = 0U;
 
         /* A size that is not a 24xx part is refused here, before anything
            is sent to the bus. */
-        if ((hi2c != NULL) && (ee24_size_bytes(size_kbit) != 0U))
+        if ((hi2c != NULL) && (size != 0U))
         {
-            handle->hi2c        = hi2c;
-            handle->dev_address = dev_address;
-            handle->size_kbit   = size_kbit;
-            handle->wp_port     = wp_port;
-            handle->wp_pin      = wp_pin;
+            handle->hi2c    = hi2c;
+            handle->wp_port = wp_port;
+            handle->wp_pin  = wp_pin;
+
+            /* Everything that depends only on the chip is worked out once,
+               here, so a read or a write only has to look it up. The size
+               comes last of all, below. */
+            handle->page_size = ee24_page_size(size_kbit);
+            handle->read_size = ee24_read_size(size_kbit);
+
+            /* From 24C32 up the memory address goes out as two bytes, below
+               that as one. */
+            handle->mem_size = (size_kbit >= 32U) ? (uint16_t)I2C_MEMADD_SIZE_16BIT
+                                                  : (uint16_t)I2C_MEMADD_SIZE_8BIT;
+
+            /* A 24C04 to 24C16 ignores the address pins its block number
+               takes, so they are cleared here. Left set, a chip with A0 tied
+               high would have its first block read from its second. */
+            handle->dev_address = (uint8_t)(dev_address & (uint8_t)~ee24_block_bits(size_kbit));
 
             /* Protected from the start. A write releases it only while it runs. */
             ee24_write_protect(handle, GPIO_PIN_SET);
 
             /* Does a chip answer at this address? */
-            if (HAL_I2C_IsDeviceReady(hi2c, dev_address, EE24_INIT_TRIALS, EE24_INIT_TIMEOUT_MS)
+            if (HAL_I2C_IsDeviceReady(hi2c, handle->dev_address, EE24_INIT_TRIALS,
+                                      EE24_INIT_TIMEOUT_MS)
                 != HAL_OK)
             {
                 err = EE24_ERR_I2C;
@@ -145,7 +164,7 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
             /* Only now may ee24_read() and ee24_write() use it. */
             if (err == EE24_ERR_NONE)
             {
-                handle->ready = 1U;
+                handle->size = size;
             }
         }
     }
@@ -168,9 +187,19 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
                      uint32_t timeout_ms)
 {
     /* The clock starts now, so a wait for the mutex counts against the
-       timeout as well. Arguments are checked before anything else. */
+       timeout as well. */
     uint32_t   start = HAL_GetTick();
-    ee24_err_t err   = ee24_check(handle, address, data, len);
+    ee24_err_t err   = EE24_ERR_INVALID;
+
+    assert_param(handle != NULL);
+    assert_param(data != NULL);
+
+    /* Arguments first. A handle ee24_init() did not accept has a size of 0,
+       and is refused like a NULL one. */
+    if ((handle != NULL) && (data != NULL) && (handle->size != 0U))
+    {
+        err = ee24_range(handle, address, len);
+    }
 
     if ((err == EE24_ERR_NONE) && (len > 0U))
     {
@@ -181,13 +210,12 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
         {
             /* Read in pieces: 24C04 to 24C16 put each 256 byte block at its own
                I2C address, and the HAL cannot count a whole 24C512 at once. */
-            uint32_t limit = ee24_read_size(handle->size_kbit);
-            size_t   done  = 0U;
+            size_t done = 0U;
 
             while ((err == EE24_ERR_NONE) && (done < len))
             {
                 uint32_t      at     = address + (uint32_t)done;
-                uint32_t      chunk  = ee24_chunk(at, len - done, limit);
+                uint32_t      chunk  = ee24_chunk(at, len - done, handle->read_size);
                 ee24_target_t target = ee24_target(handle, at);
                 uint32_t      left   = ee24_remaining(start, timeout_ms);
 
@@ -234,9 +262,19 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
                       uint32_t timeout_ms)
 {
     /* The clock starts now, so a wait for the mutex counts against the
-       timeout as well. Arguments are checked before anything else. */
+       timeout as well. */
     uint32_t   start = HAL_GetTick();
-    ee24_err_t err   = ee24_check(handle, address, data, len);
+    ee24_err_t err   = EE24_ERR_INVALID;
+
+    assert_param(handle != NULL);
+    assert_param(data != NULL);
+
+    /* Arguments first. A handle ee24_init() did not accept has a size of 0,
+       and is refused like a NULL one. */
+    if ((handle != NULL) && (data != NULL) && (handle->size != 0U))
+    {
+        err = ee24_range(handle, address, len);
+    }
 
     if ((err == EE24_ERR_NONE) && (len > 0U))
     {
@@ -247,15 +285,14 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
         {
             /* Write a page at a time. Sent more than a page, the chip wraps
                round inside it and overwrites what it has just been given. */
-            uint32_t page = ee24_page_size(handle->size_kbit);
-            size_t   done = 0U;
+            size_t done = 0U;
 
             ee24_write_protect(handle, GPIO_PIN_RESET);
 
             while ((err == EE24_ERR_NONE) && (done < len))
             {
                 uint32_t      at     = address + (uint32_t)done;
-                uint32_t      chunk  = ee24_chunk(at, len - done, page);
+                uint32_t      chunk  = ee24_chunk(at, len - done, handle->page_size);
                 ee24_target_t target = ee24_target(handle, at);
                 uint32_t      left   = ee24_remaining(start, timeout_ms);
 
@@ -342,9 +379,9 @@ static uint32_t ee24_size_bytes(uint16_t size_kbit)
  * @param[in] size_kbit  Size in kilobits, already checked.
  * @return Page size in bytes.
  */
-static uint32_t ee24_page_size(uint16_t size_kbit)
+static uint8_t ee24_page_size(uint16_t size_kbit)
 {
-    uint32_t page = 32U;
+    uint8_t page = 32U;
 
     if (size_kbit <= 2U)
     {
@@ -372,11 +409,11 @@ static uint32_t ee24_page_size(uint16_t size_kbit)
  * @param[in] size_kbit  Size in kilobits, already checked.
  * @return The boundary in bytes.
  */
-static uint32_t ee24_read_size(uint16_t size_kbit)
+static uint16_t ee24_read_size(uint16_t size_kbit)
 {
     /* The HAL counts a transfer in 16 bits, so a 24C512, 64 KB, is read in
        two halves. Every smaller chip fits in one. */
-    uint32_t limit = EE24_READ_LIMIT;
+    uint16_t limit = EE24_READ_LIMIT;
 
     /* 24C04 to 24C16 put each 256 byte block at its own I2C address, so a
        read must stop at the end of a block. */
@@ -390,37 +427,62 @@ static uint32_t ee24_read_size(uint16_t size_kbit)
 
 /*****************************************************************************************************/
 /**
- * @brief Check the arguments every read and write share.
+ * @brief The address pins a chip ignores, because its block number goes there instead.
  *
- * @param[in] handle   Handle to check.
- * @param[in] address  First byte of the transfer.
- * @param[in] data     The caller's buffer.
- * @param[in] len      Length of the transfer.
- * @return EE24_ERR_NONE, EE24_ERR_INVALID or EE24_ERR_RANGE.
+ * @param[in] size_kbit  Size in kilobits, already checked.
+ * @return The bits of the 8 bit I2C address the chip uses for its block number.
  */
-static ee24_err_t ee24_check(const ee24_t *handle, uint32_t address, const void *data, size_t len)
+static uint8_t ee24_block_bits(uint16_t size_kbit)
 {
-    ee24_err_t err = EE24_ERR_INVALID;
+    uint8_t bits = 0U;
 
-    assert_param(handle != NULL);
-    assert_param(data != NULL);
-
-    /* A handle ee24_init() did not accept is refused like a NULL one. */
-    if ((handle != NULL) && (data != NULL) && (handle->ready != 0U))
+    /* One address byte reaches 256 bytes, so 24C04 to 24C16 answer at one I2C
+       address per 256 byte block, the block number sitting where A0 to A2
+       would be. Bit 1 is A0, bit 2 A1 and bit 3 A2. */
+    switch (size_kbit)
     {
-        uint32_t size = ee24_size_bytes(handle->size_kbit);
+        case 4U:
+            /* Two blocks, in place of A0. */
+            bits = 0x02U;
+            break;
 
-        /* Written as a subtraction, because address + len can wrap past zero
-           and then look small enough. Sent anyway, the chip would wrap round
-           and overwrite its own start. */
-        if ((address > size) || (len > (size_t)(size - address)))
-        {
-            err = EE24_ERR_RANGE;
-        }
-        else
-        {
-            err = EE24_ERR_NONE;
-        }
+        case 8U:
+            /* Four blocks, in place of A0 and A1. */
+            bits = 0x06U;
+            break;
+
+        case 16U:
+            /* Eight blocks, in place of all three. */
+            bits = 0x0EU;
+            break;
+
+        default:
+            /* One block, or a two byte memory address: every pin counts. */
+            break;
+    }
+
+    return bits;
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Check that a transfer stays inside the chip.
+ *
+ * @param[in] handle   Handle of the chip.
+ * @param[in] address  First byte of the transfer.
+ * @param[in] len      Length of the transfer.
+ * @return EE24_ERR_NONE or EE24_ERR_RANGE.
+ */
+static ee24_err_t ee24_range(const ee24_t *handle, uint32_t address, size_t len)
+{
+    ee24_err_t err = EE24_ERR_NONE;
+
+    /* Written as a subtraction, because address + len can wrap past zero and
+       then look small enough. Sent anyway, the chip would wrap round and
+       overwrite its own start. */
+    if ((address > handle->size) || (len > (size_t)(handle->size - address)))
+    {
+        err = EE24_ERR_RANGE;
     }
 
     return err;
@@ -463,22 +525,25 @@ static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address)
 {
     ee24_target_t target;
 
-    if (handle->size_kbit >= 32U)
+    /* Only the address changes from one piece to the next. What depends on
+       the chip alone was worked out by ee24_init(). */
+    target.mem_size = handle->mem_size;
+
+    if (handle->mem_size == (uint16_t)I2C_MEMADD_SIZE_16BIT)
     {
-        /* From 24C32 up the memory address goes out as two bytes. */
+        /* Two address bytes reach the whole chip, at one I2C address. */
         target.dev_address = handle->dev_address;
         target.mem_address = (uint16_t)address;
-        target.mem_size    = (uint16_t)I2C_MEMADD_SIZE_16BIT;
     }
     else
     {
-        /* Below that it is one byte, which reaches 256 bytes. 24C04 to 24C16
-           take the higher bits in the I2C address, where A0 to A2 would be:
-           bit 8 of the memory address lands in bit 1 of the 8 bit I2C address,
-           and so on up. On a 24C01 or 24C02 those bits are always 0. */
+        /* One byte reaches 256 bytes. 24C04 to 24C16 take the higher bits in
+           the I2C address, where A0 to A2 would be: bit 8 of the memory
+           address lands in bit 1 of the 8 bit I2C address, and so on up.
+           ee24_init() cleared those bits, so an OR puts them in. On a 24C01 or
+           24C02 they are always 0. */
         target.dev_address = (uint16_t)(handle->dev_address | ((address >> 7U) & 0x0EU));
         target.mem_address = (uint16_t)(address & 0xFFU);
-        target.mem_size    = (uint16_t)I2C_MEMADD_SIZE_8BIT;
     }
 
     return target;

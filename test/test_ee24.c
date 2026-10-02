@@ -136,10 +136,12 @@ static void       chip_reset(uint16_t size_kbit);
 static void       counts_clear(void);
 static void       chip_fault(const char *what);
 static bool       transfer_begins(const I2C_HandleTypeDef *hi2c, uint32_t bytes);
+static uint16_t   chip_block_bits(void);
 static bool       chip_addressed(uint16_t dev_address);
 static bool       chip_decode(uint16_t dev_address, uint16_t mem_address, uint16_t mem_size,
                               const uint8_t *data, uint16_t size, uint32_t *address);
 static ee24_err_t init_chip(uint16_t size_kbit, bool with_wp);
+static ee24_err_t init_chip_at(uint16_t size_kbit, uint16_t chip_address, uint8_t dev_address);
 static void       pattern_fill(uint32_t seed);
 
 /*
@@ -659,6 +661,9 @@ void test_zero_bytes_does_nothing(void)
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 0U, 100U));
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0U, readback, 0U, 100U));
+
+    /* Nothing, just past the last byte, still fits. */
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, chip.size, readback, 0U, 100U));
     TEST_ASSERT_EQUAL_INT(0, chip.transfers);
 }
 
@@ -764,6 +769,67 @@ void test_each_block_has_its_own_address(void)
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(2U, false));
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0xFFU, readback, 1U, 100U));
     TEST_ASSERT_EQUAL_HEX16_MESSAGE(0xA0U, chip.last_dev_address, "a 24C02 has only one block");
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Each EE24_ADDRESS_ value is the address its pins give, and reaches a chip wired that way.
+ */
+void test_every_address_reaches_its_chip(void)
+{
+    /* A0 is bit 1 of the 8 bit address, A1 bit 2 and A2 bit 3. */
+    static const uint8_t addresses[] = {
+        EE24_ADDRESS_DEFAULT, EE24_ADDRESS_A0,    EE24_ADDRESS_A1,    EE24_ADDRESS_A0_A1,
+        EE24_ADDRESS_A2,      EE24_ADDRESS_A0_A2, EE24_ADDRESS_A1_A2, EE24_ADDRESS_A0_A1_A2,
+    };
+    static const uint8_t expected[] = { 0xA0U, 0xA2U, 0xA4U, 0xA6U, 0xA8U, 0xAAU, 0xACU, 0xAEU };
+    size_t               i          = 0U;
+
+    for (i = 0U; i < (sizeof(addresses) / sizeof(addresses[0])); i++)
+    {
+        TEST_ASSERT_EQUAL_HEX8(expected[i], addresses[i]);
+
+        TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip_at(256U, expected[i], addresses[i]));
+        TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 100U, pattern, 4U, 100U));
+        TEST_ASSERT_EQUAL_MEMORY(pattern, &chip.mem[100], 4U);
+        TEST_ASSERT_EQUAL_HEX16(expected[i], chip.last_dev_address);
+    }
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief The pins a 24C04 to 24C16 ignores are ignored, so its first block stays reachable.
+ *
+ * Such a chip puts its block number where those pins would be. Kept in the
+ * address, a pin tied high would send the first block to the second.
+ */
+void test_the_pins_a_small_chip_ignores_are_ignored(void)
+{
+    /* A0 on a 24C04, A0 and A1 on a 24C08, all three on a 24C16. */
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip_at(4U, 0xA0U, EE24_ADDRESS_A0));
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 4U, 100U));
+    TEST_ASSERT_EQUAL_MEMORY_MESSAGE(pattern, &chip.mem[0], 4U, "the first block was missed");
+    TEST_ASSERT_EQUAL_HEX16(0xA0U, chip.last_dev_address);
+
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip_at(8U, 0xA0U, EE24_ADDRESS_A0_A1));
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 4U, 100U));
+    TEST_ASSERT_EQUAL_MEMORY(pattern, &chip.mem[0], 4U);
+
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip_at(16U, 0xA0U, EE24_ADDRESS_A0_A1_A2));
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 4U, 100U));
+    TEST_ASSERT_EQUAL_MEMORY(pattern, &chip.mem[0], 4U);
+
+    /* A1 still counts on a 24C04, so two of them can share a bus. */
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip_at(4U, 0xA4U, EE24_ADDRESS_A0_A1));
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0x100U, pattern, 4U, 100U));
+    TEST_ASSERT_EQUAL_MEMORY(pattern, &chip.mem[0x100], 4U);
+    TEST_ASSERT_EQUAL_HEX16(0xA6U, chip.last_dev_address);
+
+    /* Every pin counts on a 24C02 and from 24C32 up, so a chip with all of
+       them grounded does not answer to A0. */
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_I2C, init_chip_at(2U, 0xA0U, EE24_ADDRESS_A0));
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_I2C, init_chip_at(32U, 0xA0U, EE24_ADDRESS_A0));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, chip.faults, chip.fault);
 }
 
 /*****************************************************************************************************/
@@ -1145,6 +1211,8 @@ int main(void)
     RUN_TEST(test_a_write_is_split_at_every_page);
     RUN_TEST(test_a_read_is_split_at_every_block);
     RUN_TEST(test_each_block_has_its_own_address);
+    RUN_TEST(test_every_address_reaches_its_chip);
+    RUN_TEST(test_the_pins_a_small_chip_ignores_are_ignored);
     RUN_TEST(test_a_write_waits_only_as_long_as_the_chip_needs);
     RUN_TEST(test_the_chip_is_asked_every_millisecond);
     RUN_TEST(test_the_chip_is_ready_when_a_write_returns);
@@ -1289,15 +1357,14 @@ static bool transfer_begins(const I2C_HandleTypeDef *hi2c, uint32_t bytes)
 
 /*****************************************************************************************************/
 /**
- * @brief Whether an I2C address is one of the chip's own.
+ * @brief The bits of the I2C address that carry the block number, and not a pin.
  *
  * A chip from 24C04 to 24C16 answers on one address per block, the block
- * number sitting where A0 to A2 would.
+ * number sitting where A0 to A2 would, starting from A0.
  *
- * @param[in] dev_address  The 8 bit address sent.
- * @return true when it is one of this chip's.
+ * @return The block bits of the 8 bit address, 0 for a chip with one block.
  */
-static bool chip_addressed(uint16_t dev_address)
+static uint16_t chip_block_bits(void)
 {
     uint16_t block_bits = 0U;
 
@@ -1306,7 +1373,19 @@ static bool chip_addressed(uint16_t dev_address)
         block_bits = (uint16_t)(((chip.size / 256U) - 1U) << 1U);
     }
 
-    return (dev_address & (uint16_t)~block_bits) == chip.base_address;
+    return block_bits;
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Whether an I2C address is one of the chip's own.
+ *
+ * @param[in] dev_address  The 8 bit address sent.
+ * @return true when it is one of this chip's.
+ */
+static bool chip_addressed(uint16_t dev_address)
+{
+    return (dev_address & (uint16_t)~chip_block_bits()) == chip.base_address;
 }
 
 /*****************************************************************************************************/
@@ -1346,10 +1425,9 @@ static bool chip_decode(uint16_t dev_address, uint16_t mem_address, uint16_t mem
     {
         uint32_t block = 0U;
 
-        if (chip.mem_size == I2C_MEMADD_SIZE_8BIT)
-        {
-            block = ((uint32_t)dev_address >> 1U) & 0x07U;
-        }
+        /* Only the block bits, since a pin tied high is not part of the
+           block number. */
+        block = ((uint32_t)dev_address & chip_block_bits()) >> 1U;
 
         *address = (block * 256U) + mem_address;
 
@@ -1387,6 +1465,32 @@ static ee24_err_t init_chip(uint16_t size_kbit, bool with_wp)
 
     err = ee24_init(&ee, &test_i2c, EE24_ADDRESS_DEFAULT, size_kbit,
                     with_wp ? &test_wp_port : NULL, with_wp ? WP_PIN : 0U);
+
+    counts_clear();
+
+    return err;
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Put a new chip on the bus at an address of its own, and hand ee24_init() another.
+ *
+ * @param[in] size_kbit     Size from the part name.
+ * @param[in] chip_address  Where the chip answers, its ignored pins as 0.
+ * @param[in] dev_address   What ee24_init() is given.
+ * @return What ee24_init() returned.
+ */
+static ee24_err_t init_chip_at(uint16_t size_kbit, uint16_t chip_address, uint8_t dev_address)
+{
+    ee24_err_t err = EE24_ERR_NONE;
+
+    chip_reset(size_kbit);
+    chip.base_address = chip_address;
+
+    /* A new handle, so the mutex a previous init made is not this one's. */
+    mutex_created_at = NULL;
+
+    err = ee24_init(&ee, &test_i2c, dev_address, size_kbit, NULL, 0U);
 
     counts_clear();
 

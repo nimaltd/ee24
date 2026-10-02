@@ -41,8 +41,18 @@ extern "C"
  * ****************************************************************************************************
 */
 
-/* A0, A1 and A2 tied to ground, in the 8 bit form the HAL expects. */
+/* The I2C address for each way the A0, A1 and A2 pins can be wired, in the 8 bit
+   form the HAL expects. The name lists the pins tied high, and the others are
+   tied to ground. A 24C04, 24C08 or 24C16 ignores some of the pins, and
+   ee24_init() ignores them too. */
 #define EE24_ADDRESS_DEFAULT    0xA0U
+#define EE24_ADDRESS_A0         0xA2U
+#define EE24_ADDRESS_A1         0xA4U
+#define EE24_ADDRESS_A0_A1      0xA6U
+#define EE24_ADDRESS_A2         0xA8U
+#define EE24_ADDRESS_A0_A2      0xAAU
+#define EE24_ADDRESS_A1_A2      0xACU
+#define EE24_ADDRESS_A0_A1_A2   0xAEU
 
 /*
  * ****************************************************************************************************
@@ -71,13 +81,15 @@ typedef enum
  */
 typedef struct
 {
-    I2C_HandleTypeDef *hi2c;        /**< The bus the chip is on.                    */
-    GPIO_TypeDef      *wp_port;     /**< Write protect port, NULL when not wired.   */
-    uint16_t          wp_pin;       /**< Write protect pin.                         */
-    uint16_t          size_kbit;    /**< Size from the part number, 256 for 24C256. */
-    uint8_t           dev_address;  /**< I2C address, in the 8 bit HAL form.        */
-    uint8_t           ready;        /**< Set once ee24_init() has succeeded.        */
-    osal_mutex_t      mutex;        /**< Lets one thread use the chip at a time.    */
+    I2C_HandleTypeDef *hi2c;        /**< The bus the chip is on.                        */
+    GPIO_TypeDef      *wp_port;     /**< Write protect port, NULL when not wired.       */
+    uint32_t          size;         /**< Bytes in the chip, 0 until ee24_init() works.  */
+    uint16_t          wp_pin;       /**< Write protect pin.                             */
+    uint16_t          read_size;    /**< Most one read may carry: a block, or 32 KB.    */
+    uint16_t          mem_size;     /**< I2C_MEMADD_SIZE_8BIT or _16BIT.                */
+    uint8_t           page_size;    /**< Most one write may carry without wrapping.     */
+    uint8_t           dev_address;  /**< I2C address, with the pins the chip ignores 0. */
+    osal_mutex_t      mutex;        /**< Lets one thread use the chip at a time.        */
 
 } ee24_t;
 

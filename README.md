@@ -211,9 +211,24 @@ An EEPROM cell survives around a million writes. That is a lot for a setting a p
 
 ### The address
 
-`EE24_ADDRESS_DEFAULT` is `0xA0`, for a chip with its A0, A1 and A2 pins tied to ground. Each pin tied high adds to it: A0 adds `0x02`, A1 `0x04` and A2 `0x08`, so up to eight chips can share one bus. The address is in the 8 bit form the HAL uses.
+Pick the address from how the chip's A0, A1 and A2 pins are wired. The name lists the pins tied high, and the others are tied to ground, so up to eight chips can share one bus:
 
-The 24C04, 24C08 and 24C16 use some of those address bits for the memory address instead, so fewer of them fit on one bus, and some makers ignore the pins altogether. Check the datasheet. With every address pin tied to ground, `EE24_ADDRESS_DEFAULT` is right for all of them.
+| A2 | A1 | A0 | Address | Value |
+|---|---|---|---|---|
+| GND | GND | GND | `EE24_ADDRESS_DEFAULT` | `0xA0` |
+| GND | GND | VCC | `EE24_ADDRESS_A0` | `0xA2` |
+| GND | VCC | GND | `EE24_ADDRESS_A1` | `0xA4` |
+| GND | VCC | VCC | `EE24_ADDRESS_A0_A1` | `0xA6` |
+| VCC | GND | GND | `EE24_ADDRESS_A2` | `0xA8` |
+| VCC | GND | VCC | `EE24_ADDRESS_A0_A2` | `0xAA` |
+| VCC | VCC | GND | `EE24_ADDRESS_A1_A2` | `0xAC` |
+| VCC | VCC | VCC | `EE24_ADDRESS_A0_A1_A2` | `0xAE` |
+
+The value is in the 8 bit form the HAL uses.
+
+The 24C04, 24C08 and 24C16 use some of those pins for the memory address instead: a 24C04 ignores A0, a 24C08 A0 and A1, and a 24C16 all three. `ee24_init()` ignores the same pins, so the address only has to match the pins the chip does use. Fewer of these chips fit on one bus: four 24C04, two 24C08 and one 24C16.
+
+Some makers' 24C01 and 24C02, such as Microchip's 24LC01B and 24LC02B, ignore all three pins and always answer at `0xA0`. Check the datasheet.
 
 ### Write protect
 
