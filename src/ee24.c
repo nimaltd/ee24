@@ -149,8 +149,7 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
 
         /* Does a chip answer at this address? */
         if (HAL_I2C_IsDeviceReady(hi2c, handle->dev_address, EE24_INIT_TRIALS,
-                                  EE24_INIT_TIMEOUT_MS)
-            != HAL_OK)
+                                  EE24_INIT_TIMEOUT_MS) != HAL_OK)
         {
             err = EE24_ERR_I2C;
             break;
@@ -252,8 +251,7 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
                 err = EE24_ERR_TIMEOUT;
             }
             else if (HAL_I2C_Mem_Read(handle->hi2c, target.dev_address, target.mem_address,
-                                      target.mem_size, &data[done], (uint16_t)chunk, left)
-                     != HAL_OK)
+                                      target.mem_size, &data[done], (uint16_t)chunk, left) != HAL_OK)
             {
                 /* The HAL gets only what is left of the timeout, so the call
                    as a whole keeps to it. */
@@ -358,8 +356,7 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
                 err = EE24_ERR_TIMEOUT;
             }
             else if (HAL_I2C_Mem_Write(handle->hi2c, target.dev_address, target.mem_address,
-                                       target.mem_size, bytes, (uint16_t)chunk, left)
-                     != HAL_OK)
+                                       target.mem_size, bytes, (uint16_t)chunk, left) != HAL_OK)
             {
                 err = EE24_ERR_I2C;
             }
