@@ -11,7 +11,7 @@ jobs:
     name: Host unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The same command a developer runs locally. One definition of "run the
       # tests", so CI and a workstation cannot drift apart.
@@ -22,12 +22,12 @@ jobs:
     name: Cross compile for Cortex-M
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ee24 waits and locks through osal, so it is built here against the real
       # one, from its default branch, which is also what the installer fetches.
       - name: Fetch osal
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: nimaltd/osal
           path: osal
