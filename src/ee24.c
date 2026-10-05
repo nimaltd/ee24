@@ -22,6 +22,7 @@
 */
 
 #include "ee24.h"
+#include <stdbool.h>
 
 /*
  * ****************************************************************************************************
@@ -79,7 +80,6 @@ static uint32_t      ee24_remaining(uint32_t start, uint32_t timeout_ms);
 static ee24_err_t    ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, uint32_t start,
                                      uint32_t timeout_ms);
 static void          ee24_write_protect(const ee24_t *handle, GPIO_PinState state);
-static ee24_err_t    ee24_lock(ee24_t *handle, uint32_t timeout_ms);
 
 /*
  * ****************************************************************************************************
@@ -102,72 +102,75 @@ static ee24_err_t    ee24_lock(ee24_t *handle, uint32_t timeout_ms);
 ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_address,
                      uint16_t size_kbit, GPIO_TypeDef *wp_port, uint16_t wp_pin)
 {
-    ee24_err_t err = EE24_ERR_INVALID;
+    ee24_err_t err  = EE24_ERR_INVALID;
+    uint32_t   size = ee24_size_bytes(size_kbit);
 
     assert_param(handle != NULL);
     assert_param(hi2c != NULL);
 
-    if (handle != NULL)
+    /* Runs once. A step that fails breaks out to the one return at the end. A
+       NULL pointer is the caller's bug, left to assert_param above. */
+    do
     {
-        /* 0 for a size that is not a 24xx part. */
-        uint32_t size = ee24_size_bytes(size_kbit);
-
         /* A size of 0 marks the handle as not set up, and read and write
            refuse it. It stays 0 until every step below has worked, so a
            handle whose setup failed half way is never used. */
         handle->size = 0U;
 
-        /* A size that is not a 24xx part is refused here, before anything
-           is sent to the bus. */
-        if ((hi2c != NULL) && (size != 0U))
+        /* A size that is not a 24xx part is refused here, before anything is
+           sent to the bus. */
+        if (size == 0U)
         {
-            handle->hi2c    = hi2c;
-            handle->wp_port = wp_port;
-            handle->wp_pin  = wp_pin;
-
-            /* Everything that depends only on the chip is worked out once,
-               here, so a read or a write only has to look it up. The size
-               comes last of all, below. */
-            handle->page_size = ee24_page_size(size_kbit);
-            handle->read_size = ee24_read_size(size_kbit);
-
-            /* From 24C32 up the memory address goes out as two bytes, below
-               that as one. */
-            handle->mem_size = (size_kbit >= 32U) ? (uint16_t)I2C_MEMADD_SIZE_16BIT
-                                                  : (uint16_t)I2C_MEMADD_SIZE_8BIT;
-
-            /* A 24C04 to 24C16 ignores the address pins its block number
-               takes, so they are cleared here. Left set, a chip with A0 tied
-               high would have its first block read from its second. */
-            handle->dev_address = (uint8_t)(dev_address & (uint8_t)~ee24_block_bits(size_kbit));
-
-            /* Protected from the start. A write releases it only while it runs. */
-            ee24_write_protect(handle, GPIO_PIN_SET);
-
-            /* Does a chip answer at this address? */
-            if (HAL_I2C_IsDeviceReady(hi2c, handle->dev_address, EE24_INIT_TRIALS,
-                                      EE24_INIT_TIMEOUT_MS)
-                != HAL_OK)
-            {
-                err = EE24_ERR_I2C;
-            }
-            else
-            {
-                /* The mutex comes last, so a chip that did not answer leaves no
-                   mutex behind, and calling init again makes only one. Without
-                   an RTOS osal makes nothing, and with one it most often fails
-                   for a heap that is too small. */
-                err = (osal_mutex_create(&handle->mutex) == OSAL_ERR_NONE) ? EE24_ERR_NONE
-                                                                           : EE24_ERR_MUTEX;
-            }
-
-            /* Only now may ee24_read() and ee24_write() use it. */
-            if (err == EE24_ERR_NONE)
-            {
-                handle->size = size;
-            }
+            break;
         }
+
+        handle->hi2c    = hi2c;
+        handle->wp_port = wp_port;
+        handle->wp_pin  = wp_pin;
+
+        /* Everything that depends only on the chip is worked out once, here,
+           so a read or a write only has to look it up. The size comes last of
+           all, below. */
+        handle->page_size = ee24_page_size(size_kbit);
+        handle->read_size = ee24_read_size(size_kbit);
+
+        /* From 24C32 up the memory address goes out as two bytes, below that
+           as one. */
+        handle->mem_size = (size_kbit >= 32U) ? (uint16_t)I2C_MEMADD_SIZE_16BIT
+                                              : (uint16_t)I2C_MEMADD_SIZE_8BIT;
+
+        /* A 24C04 to 24C16 ignores the address pins its block number takes,
+           so they are cleared here. Left set, a chip with A0 tied high would
+           have its first block read from its second. */
+        handle->dev_address = (uint8_t)(dev_address & (uint8_t)~ee24_block_bits(size_kbit));
+
+        /* Protected from the start. A write releases it only while it runs. */
+        ee24_write_protect(handle, GPIO_PIN_SET);
+
+        /* Does a chip answer at this address? */
+        if (HAL_I2C_IsDeviceReady(hi2c, handle->dev_address, EE24_INIT_TRIALS,
+                                  EE24_INIT_TIMEOUT_MS)
+            != HAL_OK)
+        {
+            err = EE24_ERR_I2C;
+            break;
+        }
+
+        /* The mutex comes last, so a chip that did not answer leaves no mutex
+           behind, and calling init again makes only one. Without an RTOS osal
+           makes nothing, and with one it most often fails for a heap that is
+           too small. */
+        if (osal_mutex_create(&handle->mutex) != OSAL_ERR_NONE)
+        {
+            err = EE24_ERR_MUTEX;
+            break;
+        }
+
+        /* Only now may ee24_read() and ee24_write() use it. */
+        handle->size = size;
+        err          = EE24_ERR_NONE;
     }
+    while (false);
 
     return err;
 }
@@ -190,58 +193,82 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
        timeout as well. */
     uint32_t   start = HAL_GetTick();
     ee24_err_t err   = EE24_ERR_INVALID;
+    osal_err_t lock  = OSAL_ERR_NONE;
+    size_t     done  = 0U;
 
     assert_param(handle != NULL);
     assert_param(data != NULL);
 
-    /* Arguments first. A handle ee24_init() did not accept has a size of 0,
-       and is refused like a NULL one. */
-    if ((handle != NULL) && (data != NULL) && (handle->size != 0U))
+    /* Runs once. A check that fails breaks out to the one return at the end. */
+    do
     {
-        err = ee24_range(handle, address, len);
-    }
-
-    if ((err == EE24_ERR_NONE) && (len > 0U))
-    {
-        /* One thread at a time. Without an RTOS this does nothing. */
-        err = ee24_lock(handle, timeout_ms);
-
-        if (err == EE24_ERR_NONE)
+        /* A handle ee24_init() did not accept has a size of 0. A NULL
+           pointer is the caller's bug, left to assert_param above. */
+        if (handle->size == 0U)
         {
-            /* Read in pieces: 24C04 to 24C16 put each 256 byte block at its own
-               I2C address, and the HAL cannot count a whole 24C512 at once. */
-            size_t done = 0U;
-
-            while ((err == EE24_ERR_NONE) && (done < len))
-            {
-                uint32_t      at     = address + (uint32_t)done;
-                uint32_t      chunk  = ee24_chunk(at, len - done, handle->read_size);
-                ee24_target_t target = ee24_target(handle, at);
-                uint32_t      left   = ee24_remaining(start, timeout_ms);
-
-                if (left == 0U)
-                {
-                    /* Out of time before the next piece. */
-                    err = EE24_ERR_TIMEOUT;
-                }
-                else if (HAL_I2C_Mem_Read(handle->hi2c, target.dev_address, target.mem_address,
-                                          target.mem_size, &data[done], (uint16_t)chunk, left)
-                         != HAL_OK)
-                {
-                    /* The HAL gets only what is left of the timeout, so the
-                       call as a whole keeps to it. */
-                    err = EE24_ERR_I2C;
-                }
-                else
-                {
-                    done += chunk;
-                }
-            }
-
-            /* Give the chip back to other threads, error or not. */
-            osal_mutex_unlock(&handle->mutex);
+            break;
         }
+
+        /* Nothing goes to the bus for a range past the end of the chip, and
+           nothing at all for 0 bytes, which succeeds. */
+        err = ee24_range(handle, address, len);
+
+        if ((err != EE24_ERR_NONE) || (len == 0U))
+        {
+            break;
+        }
+
+        /* One thread at a time. Without an RTOS osal takes nothing and this
+           always succeeds. */
+        lock = osal_mutex_lock(&handle->mutex, timeout_ms);
+
+        if (lock == OSAL_ERR_TIMEOUT)
+        {
+            /* Another thread kept the chip for the whole wait. */
+            err = EE24_ERR_TIMEOUT;
+            break;
+        }
+
+        if (lock != OSAL_ERR_NONE)
+        {
+            /* Refused outright, such as from an interrupt. */
+            err = EE24_ERR_MUTEX;
+            break;
+        }
+
+        /* No break from here on: the mutex is held, and is given back below.
+           Read in pieces: 24C04 to 24C16 put each 256 byte block at its own
+           I2C address, and the HAL cannot count a whole 24C512 at once. */
+        while ((err == EE24_ERR_NONE) && (done < len))
+        {
+            uint32_t      at     = address + (uint32_t)done;
+            uint32_t      chunk  = ee24_chunk(at, len - done, handle->read_size);
+            ee24_target_t target = ee24_target(handle, at);
+            uint32_t      left   = ee24_remaining(start, timeout_ms);
+
+            if (left == 0U)
+            {
+                /* Out of time before the next piece. */
+                err = EE24_ERR_TIMEOUT;
+            }
+            else if (HAL_I2C_Mem_Read(handle->hi2c, target.dev_address, target.mem_address,
+                                      target.mem_size, &data[done], (uint16_t)chunk, left)
+                     != HAL_OK)
+            {
+                /* The HAL gets only what is left of the timeout, so the call
+                   as a whole keeps to it. */
+                err = EE24_ERR_I2C;
+            }
+            else
+            {
+                done += chunk;
+            }
+        }
+
+        /* Give the chip back to other threads, error or not. */
+        osal_mutex_unlock(&handle->mutex);
     }
+    while (false);
 
     return err;
 }
@@ -265,67 +292,92 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
        timeout as well. */
     uint32_t   start = HAL_GetTick();
     ee24_err_t err   = EE24_ERR_INVALID;
+    osal_err_t lock  = OSAL_ERR_NONE;
+    size_t     done  = 0U;
 
     assert_param(handle != NULL);
     assert_param(data != NULL);
 
-    /* Arguments first. A handle ee24_init() did not accept has a size of 0,
-       and is refused like a NULL one. */
-    if ((handle != NULL) && (data != NULL) && (handle->size != 0U))
+    /* Runs once. A check that fails breaks out to the one return at the end. */
+    do
     {
-        err = ee24_range(handle, address, len);
-    }
-
-    if ((err == EE24_ERR_NONE) && (len > 0U))
-    {
-        /* One thread at a time. Without an RTOS this does nothing. */
-        err = ee24_lock(handle, timeout_ms);
-
-        if (err == EE24_ERR_NONE)
+        /* A handle ee24_init() did not accept has a size of 0. A NULL
+           pointer is the caller's bug, left to assert_param above. */
+        if (handle->size == 0U)
         {
-            /* Write a page at a time. Sent more than a page, the chip wraps
-               round inside it and overwrites what it has just been given. */
-            size_t done = 0U;
-
-            ee24_write_protect(handle, GPIO_PIN_RESET);
-
-            while ((err == EE24_ERR_NONE) && (done < len))
-            {
-                uint32_t      at     = address + (uint32_t)done;
-                uint32_t      chunk  = ee24_chunk(at, len - done, handle->page_size);
-                ee24_target_t target = ee24_target(handle, at);
-                uint32_t      left   = ee24_remaining(start, timeout_ms);
-
-                /* The HAL takes a pointer to non-const, but a write only reads
-                   through it, so casting the const away here is safe. */
-                uint8_t *bytes = (uint8_t *)&data[done];
-
-                if (left == 0U)
-                {
-                    /* Out of time before the next page. */
-                    err = EE24_ERR_TIMEOUT;
-                }
-                else if (HAL_I2C_Mem_Write(handle->hi2c, target.dev_address, target.mem_address,
-                                           target.mem_size, bytes, (uint16_t)chunk, left)
-                         != HAL_OK)
-                {
-                    err = EE24_ERR_I2C;
-                }
-                else
-                {
-                    /* The chip stores the page after the transfer ends, and does
-                       not answer anything until it has. So the next page, or
-                       the caller's next call, waits for it here. */
-                    err = ee24_wait_ready(handle, target.dev_address, start, timeout_ms);
-                    done += chunk;
-                }
-            }
-
-            /* Protected again and given back on every way out, errors included. */
-            ee24_write_protect(handle, GPIO_PIN_SET);
-            osal_mutex_unlock(&handle->mutex);
+            break;
         }
+
+        /* Nothing goes to the bus for a range past the end of the chip, and
+           nothing at all for 0 bytes, which succeeds. */
+        err = ee24_range(handle, address, len);
+
+        if ((err != EE24_ERR_NONE) || (len == 0U))
+        {
+            break;
+        }
+
+        /* One thread at a time. Without an RTOS osal takes nothing and this
+           always succeeds. */
+        lock = osal_mutex_lock(&handle->mutex, timeout_ms);
+
+        if (lock == OSAL_ERR_TIMEOUT)
+        {
+            /* Another thread kept the chip for the whole wait. */
+            err = EE24_ERR_TIMEOUT;
+            break;
+        }
+
+        if (lock != OSAL_ERR_NONE)
+        {
+            /* Refused outright, such as from an interrupt. */
+            err = EE24_ERR_MUTEX;
+            break;
+        }
+
+        /* No break from here on: the mutex is held and write protect is off,
+           and both are put back below. Write a page at a time. Sent more than
+           a page, the chip wraps round inside it and overwrites what it has
+           just been given. */
+        ee24_write_protect(handle, GPIO_PIN_RESET);
+
+        while ((err == EE24_ERR_NONE) && (done < len))
+        {
+            uint32_t      at     = address + (uint32_t)done;
+            uint32_t      chunk  = ee24_chunk(at, len - done, handle->page_size);
+            ee24_target_t target = ee24_target(handle, at);
+            uint32_t      left   = ee24_remaining(start, timeout_ms);
+
+            /* The HAL takes a pointer to non-const, but a write only reads
+               through it, so casting the const away here is safe. */
+            uint8_t *bytes = (uint8_t *)&data[done];
+
+            if (left == 0U)
+            {
+                /* Out of time before the next page. */
+                err = EE24_ERR_TIMEOUT;
+            }
+            else if (HAL_I2C_Mem_Write(handle->hi2c, target.dev_address, target.mem_address,
+                                       target.mem_size, bytes, (uint16_t)chunk, left)
+                     != HAL_OK)
+            {
+                err = EE24_ERR_I2C;
+            }
+            else
+            {
+                /* The chip stores the page after the transfer ends, and does
+                   not answer anything until it has. So the next page, or the
+                   caller's next call, waits for it here. */
+                err = ee24_wait_ready(handle, target.dev_address, start, timeout_ms);
+                done += chunk;
+            }
+        }
+
+        /* Protected again and given back on every way out, errors included. */
+        ee24_write_protect(handle, GPIO_PIN_SET);
+        osal_mutex_unlock(&handle->mutex);
     }
+    while (false);
 
     return err;
 }
@@ -624,36 +676,4 @@ static void ee24_write_protect(const ee24_t *handle, GPIO_PinState state)
     {
         HAL_GPIO_WritePin(handle->wp_port, handle->wp_pin, state);
     }
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Take the handle's mutex, and say what went wrong in ee24's terms.
- *
- * @param[in,out] handle      Handle of the chip.
- * @param[in]     timeout_ms  How long to wait for another thread to finish.
- * @return EE24_ERR_NONE, EE24_ERR_TIMEOUT or EE24_ERR_MUTEX.
- */
-static ee24_err_t ee24_lock(ee24_t *handle, uint32_t timeout_ms)
-{
-    ee24_err_t err = EE24_ERR_NONE;
-
-    /* Without an RTOS osal takes nothing and always succeeds. */
-    switch (osal_mutex_lock(&handle->mutex, timeout_ms))
-    {
-        case OSAL_ERR_NONE:
-            break;
-
-        case OSAL_ERR_TIMEOUT:
-            /* Another thread kept the chip for the whole wait. */
-            err = EE24_ERR_TIMEOUT;
-            break;
-
-        default:
-            /* Refused outright, such as from an interrupt. */
-            err = EE24_ERR_MUTEX;
-            break;
-    }
-
-    return err;
 }

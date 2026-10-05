@@ -67,7 +67,7 @@ extern "C"
 typedef enum
 {
     EE24_ERR_NONE    = 0, /**< Done.                                                  */
-    EE24_ERR_INVALID = 1, /**< A NULL pointer, an unknown size, or no ee24_init().   */
+    EE24_ERR_INVALID = 1, /**< An unknown size, or a handle with no ee24_init().     */
     EE24_ERR_RANGE   = 2, /**< The address and length run past the end of the chip.  */
     EE24_ERR_I2C     = 3, /**< The chip did not answer, or the I2C transfer failed.  */
     EE24_ERR_TIMEOUT = 4, /**< Not finished in time, waiting for the mutex included. */

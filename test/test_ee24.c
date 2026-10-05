@@ -30,6 +30,7 @@
  * ****************************************************************************************************
 */
 
+#include <setjmp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -113,6 +114,11 @@ static int               gpio_writes = 0;
 static uint8_t           pattern[CHIP_MAX_BYTES];
 static uint8_t           readback[CHIP_MAX_BYTES];
 
+/* assert_param, as CubeMX builds it with Enable Full Assert. */
+static jmp_buf assert_return;
+static bool    assert_expected = false;
+static int     asserts         = 0;
+
 /* The fake osal. */
 static osal_err_t         lock_result        = OSAL_ERR_NONE;
 static uint32_t           lock_wait_ms       = 0U;
@@ -133,6 +139,7 @@ static uint32_t           last_sleep_ms      = 0U;
 */
 
 static void       chip_reset(uint16_t size_kbit);
+static bool       assert_stops(int which);
 static void       counts_clear(void);
 static void       chip_fault(const char *what);
 static bool       transfer_begins(const I2C_HandleTypeDef *hi2c, uint32_t bytes);
@@ -149,6 +156,31 @@ static void       pattern_fill(uint32_t seed);
  * Public function implementations
  * ****************************************************************************************************
 */
+
+/*****************************************************************************************************/
+/**
+ * @brief Where assert_param lands with USE_FULL_ASSERT, as the user's main.c defines it.
+ *
+ * A test that expects it jumps back to assert_stops(). Anywhere else a valid
+ * call tripped an assert, which fails the test.
+ *
+ * @param[in] file  Source file of the assert.
+ * @param[in] line  Its line.
+ */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+    (void)file;
+    (void)line;
+
+    asserts++;
+
+    if (!assert_expected)
+    {
+        TEST_FAIL_MESSAGE("assert_param stopped a valid call");
+    }
+
+    longjmp(assert_return, 1);
+}
 
 /*****************************************************************************************************/
 /**
@@ -451,6 +483,9 @@ void setUp(void)
     mutex_created_at   = NULL;
     mutex_creates      = 0;
 
+    assert_expected = false;
+    asserts         = 0;
+
     memset(&ee, 0, sizeof(ee));
     pattern_fill(0U);
     chip_reset(256U);
@@ -503,22 +538,25 @@ void test_a_size_that_does_not_exist_is_refused(void)
 
 /*****************************************************************************************************/
 /**
- * @brief NULL pointers are refused, never followed.
+ * @brief A NULL pointer is stopped by assert_param before anything is touched.
+ *
+ * The library does not test pointers again: a NULL is the caller's bug, and
+ * a debug build with Enable Full Assert stops at the line that found it.
  */
-void test_null_pointers_are_refused(void)
+void test_null_pointers_are_caught_by_assert(void)
 {
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_INVALID,
-                          ee24_init(NULL, &test_i2c, EE24_ADDRESS_DEFAULT, 256U, NULL, 0U));
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_INVALID,
-                          ee24_init(&ee, NULL, EE24_ADDRESS_DEFAULT, 256U, NULL, 0U));
+    int which = 0;
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
 
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_INVALID, ee24_read(NULL, 0U, readback, 1U, 100U));
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_INVALID, ee24_read(&ee, 0U, NULL, 1U, 100U));
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_INVALID, ee24_write(NULL, 0U, pattern, 1U, 100U));
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_INVALID, ee24_write(&ee, 0U, NULL, 1U, 100U));
+    for (which = 0; which < 6; which++)
+    {
+        TEST_ASSERT_TRUE_MESSAGE(assert_stops(which), "a NULL got past assert_param");
+    }
+
+    TEST_ASSERT_EQUAL_INT(6, asserts);
     TEST_ASSERT_EQUAL_INT(0, chip.transfers);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, mutex_takes, "a NULL call took the mutex");
 }
 
 /*****************************************************************************************************/
@@ -665,6 +703,7 @@ void test_zero_bytes_does_nothing(void)
     /* Nothing, just past the last byte, still fits. */
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, chip.size, readback, 0U, 100U));
     TEST_ASSERT_EQUAL_INT(0, chip.transfers);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, mutex_takes, "nothing to do still took the mutex");
 }
 
 /*****************************************************************************************************/
@@ -1092,10 +1131,14 @@ void test_every_call_gives_the_mutex_back(void)
  */
 void test_a_bad_argument_takes_no_mutex(void)
 {
+    ee24_t blank;
+
+    memset(&blank, 0, sizeof(blank));
+
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_RANGE, ee24_write(&ee, chip.size, pattern, 1U, 100U));
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_INVALID, ee24_read(&ee, 0U, NULL, 1U, 100U));
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_INVALID, ee24_read(&blank, 0U, readback, 1U, 100U));
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0U, readback, 0U, 100U));
 
     TEST_ASSERT_EQUAL_INT(0, mutex_takes);
@@ -1182,6 +1225,10 @@ void test_the_mutex_wait_follows_the_timeout(void)
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0U, readback, 4U, HAL_MAX_DELAY));
     TEST_ASSERT_EQUAL_HEX32_MESSAGE(0xFFFFFFFFU, mutex_last_wait, "should wait forever");
+
+    /* A write takes the mutex in its own place, so it is checked on its own. */
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 4U, 25U));
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(25U, mutex_last_wait, "a write did not wait as long as asked");
 }
 
 /*****************************************************************************************************/
@@ -1196,7 +1243,7 @@ int main(void)
 
     RUN_TEST(test_every_size_is_accepted);
     RUN_TEST(test_a_size_that_does_not_exist_is_refused);
-    RUN_TEST(test_null_pointers_are_refused);
+    RUN_TEST(test_null_pointers_are_caught_by_assert);
     RUN_TEST(test_a_chip_that_does_not_answer_is_reported);
     RUN_TEST(test_a_failed_init_leaves_the_handle_refused);
     RUN_TEST(test_the_wrong_address_is_reported);
@@ -1288,6 +1335,58 @@ static void chip_reset(uint16_t size_kbit)
 
     chip.mem_size = (size_kbit >= 32U) ? (uint16_t)I2C_MEMADD_SIZE_16BIT
                                        : (uint16_t)I2C_MEMADD_SIZE_8BIT;
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Make one call with a NULL pointer, and say whether assert_param stopped it.
+ *
+ * @param[in] which  0 to 5: init with no handle, init with no bus, read with
+ *                   no handle, read with no buffer, then the same for write.
+ * @return true when the call stopped at an assert instead of returning.
+ */
+static bool assert_stops(int which)
+{
+    bool stopped = true;
+
+    assert_expected = true;
+
+    if (setjmp(assert_return) == 0)
+    {
+        switch (which)
+        {
+            case 0:
+                (void)ee24_init(NULL, &test_i2c, EE24_ADDRESS_DEFAULT, 256U, NULL, 0U);
+                break;
+
+            case 1:
+                (void)ee24_init(&ee, NULL, EE24_ADDRESS_DEFAULT, 256U, NULL, 0U);
+                break;
+
+            case 2:
+                (void)ee24_read(NULL, 0U, readback, 1U, 100U);
+                break;
+
+            case 3:
+                (void)ee24_read(&ee, 0U, NULL, 1U, 100U);
+                break;
+
+            case 4:
+                (void)ee24_write(NULL, 0U, pattern, 1U, 100U);
+                break;
+
+            default:
+                (void)ee24_write(&ee, 0U, NULL, 1U, 100U);
+                break;
+        }
+
+        /* Back here means no assert stopped it. */
+        stopped = false;
+    }
+
+    assert_expected = false;
+
+    return stopped;
 }
 
 /*****************************************************************************************************/

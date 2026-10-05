@@ -284,13 +284,15 @@ Nothing. A read waits on the bus, a write waits for the chip for milliseconds at
 | Error | Means |
 |---|---|
 | `EE24_ERR_NONE` | Done |
-| `EE24_ERR_INVALID` | A `NULL` pointer, a size that is not a 24xx size, or a handle `ee24_init()` did not accept |
+| `EE24_ERR_INVALID` | A size that is not a 24xx size, or a handle `ee24_init()` did not accept |
 | `EE24_ERR_RANGE` | `address + len` runs past the end of the chip. Nothing was sent |
 | `EE24_ERR_I2C` | The chip did not answer, or the transfer failed. Check the wiring, the address and the pull ups |
 | `EE24_ERR_TIMEOUT` | Time ran out, waiting for the chip or for another thread |
 | `EE24_ERR_MUTEX` | The RTOS could not create the mutex, usually a heap that is too small, or refused it, as from an interrupt |
 
 When `ee24_init()` fails, the handle is refused by `ee24_read()` and `ee24_write()` until a later `ee24_init()` succeeds.
+
+A `NULL` pointer is a bug in the calling code, so it is not returned as an error: `assert_param()` stops at it, the way the HAL does. That needs **Enable Full Assert** in CubeMX (Project Manager, Code Generator), which defines `USE_FULL_ASSERT`. Turn it on while developing, and a `NULL` lands in `assert_failed()` with the file and line. Without it, nothing checks.
 
 ---
 
