@@ -92,7 +92,7 @@ Only the files the library needs are copied into your project, and the zip is le
 
 ### Updating, and pinning a version
 
-Run the same command again. The code is replaced. osal is updated only when ee24 needs a newer one, and your `osal_config.h` is kept either way.
+Run the same command again. The code is replaced. osal is updated only when ee24 needs a newer one, and your setting in `osal_config.h`, between its `USER CODE` lines, is kept either way.
 
 By default you get the newest code on `main`. To hold a project on one release, add `--ref` with a tag, a branch or a commit:
 
