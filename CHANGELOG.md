@@ -57,7 +57,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `EE24_ADDRESS_A0` to `EE24_ADDRESS_A0_A1_A2`, beside `EE24_ADDRESS_DEFAULT`.
 - Host unit tests, run against a model of the chip with
   `python test/run_tests.py`.
-- CMake build, and a `library.yml` for installing with stm32-installer, from
+- CMake build, and an `installer.yml` for installing with stm32-installer 1.9.0
+  or newer, from
   GitHub or from a downloaded zip.
 
 ### Fixed
