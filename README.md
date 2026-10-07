@@ -104,7 +104,7 @@ stm32-installer nimaltd/ee24 --ref v4.0.0
 
 1. Copy `src/ee24.h` into your project's `Core/Inc`
 2. Copy `src/ee24.c` into your project's `Core/Src`
-3. Copy `src/osal.h` and `src/osal_config.h` from [osal](https://github.com/nimaltd/osal) into `Core/Inc`
+3. Copy every header in the `src` folder of [osal](https://github.com/nimaltd/osal) into `Core/Inc`
 
 ### Or add the whole repository to a CMake build
 
