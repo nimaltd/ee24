@@ -965,6 +965,24 @@ void test_the_timeout_covers_the_whole_call(void)
 
 /*****************************************************************************************************/
 /**
+ * @brief An unlimited timeout stays unlimited after the first page.
+ */
+void test_infinite_timeout_is_preserved_for_every_page(void)
+{
+    int i = 0;
+
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 96U, HAL_MAX_DELAY));
+    TEST_ASSERT_EQUAL_INT(3, chip.writes);
+
+    for (i = 0; i < chip.writes; i++)
+    {
+        TEST_ASSERT_EQUAL_UINT32(HAL_MAX_DELAY, chip.write_timeouts[i]);
+    }
+}
+
+/*****************************************************************************************************/
+/**
  * @brief Each transfer is given only the time that is left.
  */
 void test_each_transfer_gets_only_the_time_left(void)
@@ -1265,6 +1283,7 @@ int main(void)
     RUN_TEST(test_the_chip_is_ready_when_a_write_returns);
     RUN_TEST(test_a_chip_that_never_finishes_times_out);
     RUN_TEST(test_the_timeout_covers_the_whole_call);
+    RUN_TEST(test_infinite_timeout_is_preserved_for_every_page);
     RUN_TEST(test_each_transfer_gets_only_the_time_left);
     RUN_TEST(test_a_failed_write_is_reported);
     RUN_TEST(test_a_failed_read_is_reported);

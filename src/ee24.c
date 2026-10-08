@@ -612,7 +612,13 @@ static uint32_t ee24_remaining(uint32_t start, uint32_t timeout_ms)
     uint32_t elapsed = HAL_GetTick() - start;
     uint32_t left    = 0U;
 
-    if (elapsed < timeout_ms)
+    if (timeout_ms == HAL_MAX_DELAY)
+    {
+        /* Keep the HAL sentinel: subtracting elapsed time turns an unlimited
+           wait into a finite timeout in every transfer after the first. */
+        left = HAL_MAX_DELAY;
+    }
+    else if (elapsed < timeout_ms)
     {
         left = timeout_ms - elapsed;
     }
