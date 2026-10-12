@@ -30,14 +30,21 @@
 
 /* USER CODE BEGIN EE24_CONFIGURATION */
 
-/* How ee24_read() and ee24_write() move their data. One of:
-     EE24_TRANSFER_POLLING  the CPU moves it, and a read returns with the data
-     EE24_TRANSFER_DMA      the DMA moves it, and a read is a job like a write:
-                            it returns once started, and ee24_is_busy() or
-                            ee24_wait() says when it has finished
+/* How ee24_read() and ee24_write() move their data. Either way each is a job:
+   it returns once started, and ee24_is_busy() or ee24_wait() says when it has
+   finished. One of:
+     EE24_TRANSFER_POLLING  the CPU moves it, a piece per call
+     EE24_TRANSFER_DMA      the DMA moves it, and the CPU is free meanwhile
    With DMA, give the I2C a DMA channel for TX and one for RX in CubeMX, and
    turn on the I2C event and error interrupts. */
 #define EE24_TRANSFER                   EE24_TRANSFER_POLLING
+
+/* By polling, the most one call reads, in bytes, from 1 to 32768. A read is a
+   job: ee24_read() reads the first piece and each ee24_is_busy() the next, so
+   no call keeps your code longer than one piece takes. 256 bytes take 6 ms at
+   400 kHz and 23 ms at 100 kHz. Bigger is a little faster in all, since each
+   piece sends its address again. Not used with DMA. */
+#define EE24_POLL_CHUNK                 256U
 
 /* How long each step may take, in milliseconds, before it ends with
    EE24_ERR_TIMEOUT. HAL_MAX_DELAY in any of them waits for ever. */

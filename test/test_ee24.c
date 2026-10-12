@@ -50,6 +50,10 @@
 #define USES_DMA            (EE24_TRANSFER == EE24_TRANSFER_DMA)
 #define FOREVER             (EE24_TIMEOUT_TRANSFER_MS == HAL_MAX_DELAY)
 
+/* The most one read transfer carries in this build: 32 KB with DMA, and by
+   polling no more than EE24_POLL_CHUNK either. */
+#define READ_PIECE          (USES_DMA ? 32768U : ((EE24_POLL_CHUNK < 32768U) ? EE24_POLL_CHUNK : 32768U))
+
 /* Big enough for the largest chip, a 24C512. */
 #define CHIP_MAX_BYTES      65536U
 
@@ -920,7 +924,7 @@ void test_a_whole_24c512_reads_in_one_call(void)
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(512U, false));
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, read_all(0U, readback, 65536U));
-    TEST_ASSERT_EQUAL_INT(2, chip.reads);
+    TEST_ASSERT_EQUAL_INT((int)(65536U / READ_PIECE), chip.reads);
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, chip.faults, chip.fault);
 }
 
@@ -1545,39 +1549,72 @@ void test_each_transfer_gets_time_for_its_size(void)
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(EE24_TIMEOUT_TRANSFER_MS, chip.read_timeouts[0],
                                      "a few bytes did not get the whole of it");
 
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, read_all(0U, readback, 256U));
-    TEST_ASSERT_EQUAL_UINT32(EE24_TIMEOUT_TRANSFER_MS, chip.read_timeouts[1]);
-
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, read_all(0U, readback, 257U));
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2U * EE24_TIMEOUT_TRANSFER_MS, chip.read_timeouts[2],
-                                     "a byte past 256 did not get a second share");
-
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, write_all(0U, pattern, 32U));
     TEST_ASSERT_EQUAL_UINT32(EE24_TIMEOUT_TRANSFER_MS, chip.write_timeouts[0]);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(EE24_TIMEOUT_TRANSFER_MS, chip.poll_timeout,
                                      "the one byte question got the wrong time");
 
-    /* Each half of a 24C512 is 32 KB, 128 times 256 bytes. */
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(512U, false));
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, read_all(0U, readback, 65536U));
-    TEST_ASSERT_EQUAL_UINT32(128U * EE24_TIMEOUT_TRANSFER_MS, chip.read_timeouts[0]);
-    TEST_ASSERT_EQUAL_UINT32(128U * EE24_TIMEOUT_TRANSFER_MS, chip.read_timeouts[1]);
+    /* Only a build that reads more than 256 bytes in one call shows a piece
+       getting more than one share. */
+    if (READ_PIECE >= 32768U)
+    {
+        TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, read_all(0U, readback, 257U));
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(2U * EE24_TIMEOUT_TRANSFER_MS, chip.read_timeouts[1],
+                                         "a byte past 256 did not get a second share");
+
+        /* Each half of a 24C512 is 32 KB, 128 times 256 bytes. */
+        TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(512U, false));
+        TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, read_all(0U, readback, 65536U));
+        TEST_ASSERT_EQUAL_UINT32(128U * EE24_TIMEOUT_TRANSFER_MS, chip.read_timeouts[0]);
+        TEST_ASSERT_EQUAL_UINT32(128U * EE24_TIMEOUT_TRANSFER_MS, chip.read_timeouts[1]);
+    }
 }
 
 /*****************************************************************************************************/
 /**
- * @brief By polling a read returns with its data, as no job.
+ * @brief By polling a read goes a piece per call, none bigger than EE24_POLL_CHUNK.
  */
-void test_a_polling_read_returns_with_its_data(void)
+void test_a_polling_read_goes_a_piece_at_a_time(void)
 {
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
-    memcpy(&chip.mem[7], pattern, 300U);
+    int pieces = (int)((1000U + READ_PIECE - 1U) / READ_PIECE);
+    int i      = 0;
 
-    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 7U, readback, 300U));
-    TEST_ASSERT_EQUAL_MEMORY(pattern, readback, 300U);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, mutex_held, "kept the mutex after the read");
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
+    memcpy(&chip.mem[7], pattern, 1000U);
+
+    /* The first piece is in before the call returns. */
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 7U, readback, 1000U));
+    TEST_ASSERT_EQUAL_INT(1, chip.reads);
+    TEST_ASSERT_EQUAL_INT_MESSAGE((pieces > 1) ? 1 : 0, mutex_held,
+                                  "the mutex does not follow the read");
+
+    /* The caller's state machine does other work between its questions. */
+    while (ee24_is_busy(&ee))
+    {
+        now_us += 100U;
+    }
+
+    TEST_ASSERT_EQUAL_INT(pieces, chip.reads);
+
+    for (i = 0; i < chip.reads; i++)
+    {
+        TEST_ASSERT_TRUE_MESSAGE(chip.read_sizes[i] <= READ_PIECE, "a piece was too big");
+    }
+
+    TEST_ASSERT_EQUAL_MEMORY(pattern, readback, 1000U);
+    TEST_ASSERT_EQUAL_INT(0, mutex_held);
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_wait(&ee));
+
+    /* ee24_wait() reads one piece after the other, with no sleep between. */
+    memset(readback, 0, 1000U);
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, read_all(7U, readback, 1000U));
+    TEST_ASSERT_EQUAL_MEMORY(pattern, readback, 1000U);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sleeps, "slept between the pieces of a read");
+
+    /* A read that fits in one piece is done when the call returns. */
+    TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0U, readback, 16U));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, mutex_held, "kept the mutex after a read in one piece");
     TEST_ASSERT_FALSE(ee24_is_busy(&ee));
-    TEST_ASSERT_EQUAL_INT(0, sleeps);
 }
 
 /*****************************************************************************************************/
@@ -1801,7 +1838,7 @@ int main(void)
     RUN_TEST(test_a_dma_error_is_reported);
 #else
     RUN_TEST(test_each_transfer_gets_time_for_its_size);
-    RUN_TEST(test_a_polling_read_returns_with_its_data);
+    RUN_TEST(test_a_polling_read_goes_a_piece_at_a_time);
 #endif
 #endif
 

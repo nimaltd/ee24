@@ -35,10 +35,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   every millisecond and carries on as soon as the chip has stored the page,
   which is how the datasheets say to do it. Writes are usually about twice as
   fast.
-- **A write returns once its first page has started**, as a job, and goes on
-  page by page while the caller does something else. `ee24_is_busy()` says
-  whether it still runs and `ee24_wait()` waits for it, so code that wrote and
-  then went straight on needs an `ee24_wait()` after the write.
+- **A read or a write returns once started**, as a job, and goes on a piece
+  at a time while the caller does something else, by polling as well as by
+  DMA. `ee24_is_busy()` moves it on and says whether it still runs, and
+  `ee24_wait()` waits for it, so code that read or wrote and then went
+  straight on needs an `ee24_wait()` after the call. By polling a read moves
+  at most `EE24_POLL_CHUNK` bytes per call, 256 as shipped.
 - **No timeout argument.** The times are set once in `ee24_config.h`, for each
   step: `EE24_TIMEOUT_MUTEX_MS` for the mutex, `EE24_TIMEOUT_TRANSFER_MS` for
   every 256 bytes a transfer carries, so a long read gets time for its size,
@@ -57,8 +59,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - A real mutex per chip with an RTOS: CMSIS-RTOS v1 and v2 for FreeRTOS, and
   ThreadX, through osal. A thread finding another using the chip waits for
   it, and `ee24_wait()` sleeps, so other threads run.
-- DMA, set with `EE24_TRANSFER` in `ee24_config.h`. With DMA a read is a job
-  like a write. A DMA transfer that takes longer than its time ends the job
+- DMA, set with `EE24_TRANSFER` in `ee24_config.h`. A DMA transfer that takes longer than its time ends the job
   with `EE24_ERR_TIMEOUT`, and the I2C is set up again so the next call can
   use it.
 - `ee24_is_busy()` and `ee24_wait()`, to follow a job from a state machine or

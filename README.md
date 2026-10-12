@@ -16,10 +16,10 @@ Read or write any number of bytes at any address, and the library deals with the
   chips and the 64 KB HAL limit are all handled for you
 - Every size from 24C01 to 24C512, chosen per chip, so two different chips can
   share one project
-- A write returns at once and goes on by itself, page by page, while your code
-  does something else. `ee24_is_busy()` says whether it still runs, and
-  `ee24_wait()` waits for it
-- Polling or DMA, one setting. With DMA a read returns at once too
+- A read or a write returns at once and goes on by itself, a piece at a time,
+  while your code does something else, by polling as well as by DMA.
+  `ee24_is_busy()` says whether it still runs, and `ee24_wait()` waits for it
+- Polling or DMA, one setting
 - Writes wait only as long as the chip needs, by asking it, instead of a fixed
   10 ms a page
 - Timeouts set once, in `ee24_config.h`, for each step: a transfer gets time
@@ -146,10 +146,20 @@ ee24's settings are in `ee24_config.h`, between its `USER CODE` lines.
 
 | Value | A read or write |
 |---|---|
-| `EE24_TRANSFER_POLLING` | Moves its data with the CPU. A read returns with the data. The default |
-| `EE24_TRANSFER_DMA` | Moves its data by DMA, and a read becomes a job like a write: it returns once started |
+| `EE24_TRANSFER_POLLING` | Moves its data with the CPU, a piece per call. The default |
+| `EE24_TRANSFER_DMA` | Moves its data by DMA, and the CPU is free while it does |
 
-The question "has the chip stored the page yet?" always goes by polling: it is one byte, less time than a DMA takes to start. Only the code for the setting you pick is compiled in. Setting up DMA in CubeMX is described [below](#dma).
+Either way a read or a write is a job, and your code goes on while it runs. The question "has the chip stored the page yet?" always goes by polling: it is one byte, less time than a DMA takes to start. Only the code for the setting you pick is compiled in. Setting up DMA in CubeMX is described [below](#dma).
+
+### How much a read moves in one call, by polling
+
+```c
+#define EE24_POLL_CHUNK                 256U
+```
+
+By polling the CPU moves every byte, so a long read would keep your code waiting for all of it: 32 KB is about 750 ms at 400 kHz, and 3 s at 100 kHz. So `ee24_read()` reads the first piece of at most `EE24_POLL_CHUNK` bytes, and each `ee24_is_busy()` the next. With 256 bytes no call takes longer than 6 ms at 400 kHz, or 23 ms at 100 kHz.
+
+Bigger pieces are a little faster in all, since each piece sends the address again, 3 or 4 bytes. Smaller ones keep each call shorter. Any value from 1 to 32768 works. A read no longer than one piece is done when `ee24_read()` returns. With DMA the setting is not used.
 
 ### Timeouts
 
@@ -161,7 +171,7 @@ Each step has its own time, in milliseconds, after which it ends with `EE24_ERR_
 | `EE24_TIMEOUT_TRANSFER_MS` | Moving data on the bus, for every 256 bytes a transfer carries | 35 |
 | `EE24_TIMEOUT_PAGE_MS` | The chip storing one page, 5 ms at most on most chips, 10 ms on some older ones | 15 |
 
-The transfer time grows with the size, because a transfer's time does. 256 bytes take 23 ms at 100 kHz, the slowest clock the chips are made for, and 6 ms at 400 kHz, so 35 ms covers 100 kHz with half again to spare. A page, 32 bytes at most, gets 35 ms. A 300 byte read gets 70 ms, two shares. A whole 24C512 is read in two halves of 32 KB, 128 shares each, so each half gets 4.5 s, and takes about 3 s at 100 kHz. A clock slower than 100 kHz needs a bigger value.
+The transfer time grows with the size, because a transfer's time does. 256 bytes take 23 ms at 100 kHz, the slowest clock the chips are made for, and 6 ms at 400 kHz, so 35 ms covers 100 kHz with half again to spare. A page, 32 bytes at most, gets 35 ms, and so does a read piece of 256 bytes. A bigger piece gets more: 300 bytes get 70 ms, two shares, and with DMA, which reads 32 KB at a time, each half of a 24C512 gets 128 shares, 4.5 s, and takes about 3 s at 100 kHz. A clock slower than 100 kHz needs a bigger value.
 
 The page time is for each page, not the whole write. Writing 1 KB to a 24C256 is 32 pages, and each gets its own 15 ms. Waiting for the mutex for ever is safe: whoever has the chip gives it back within the other times.
 
@@ -215,7 +225,7 @@ int main(void)
 
 `256` says the chip is a 24C256. The last two arguments are the write protect pin, `NULL` and `0` when it is not wired to the MCU.
 
-A write only starts the job and returns at once, so `ee24_wait()` waits for it, as [below](#jobs-ee24_is_busy-and-ee24_wait). A read by polling returns with its data, and `ee24_wait()` after it returns at once, so the code above works unchanged with DMA. `ee24_wait()` returns how the job ended: `EE24_ERR_NONE` when it worked, which is 0. So check for it by name: `if (ee24_wait(...))` would mean "if it failed".
+A read or a write only starts the job and returns at once, so `ee24_wait()` waits for it, as [below](#jobs-ee24_is_busy-and-ee24_wait). The same code works by polling and with DMA. `ee24_wait()` returns how the job ended: `EE24_ERR_NONE` when it worked, which is 0. So check for it by name: `if (ee24_wait(...))` would mean "if it failed".
 
 ### Keeping settings in it
 
@@ -254,10 +264,10 @@ An EEPROM cell survives around a million writes. That is a lot for a setting a p
 
 ### Jobs: ee24_is_busy() and ee24_wait()
 
-A write is a job: the call sends the first page and returns at once, and the chip stores it by itself. Each page takes the chip up to 5 ms, so 1 KB on a 24C256, 32 pages, takes around 100 ms, and the CPU is yours meanwhile. With DMA a read is a job too. Two calls follow a job:
+A read or a write is a job: the call does the first piece and returns at once. A write sends a page, and the chip stores it by itself; each page takes the chip up to 5 ms, so 1 KB on a 24C256, 32 pages, takes around 100 ms, and the CPU is yours meanwhile. A read by polling moves one piece of `EE24_POLL_CHUNK` bytes per call; with DMA it moves by itself. Two calls follow a job:
 
-- `ee24_is_busy()` checks once and returns at once: `true` while the job runs. Each call asks the chip whether it has stored the page, and once it has, sends the next one. Call it from a state machine or the main loop.
-- `ee24_wait()` waits until the job has ended, sleeping a millisecond at a time through osal so that with an RTOS other threads run, and returns how it ended. Called once `ee24_is_busy()` has said `false`, it returns that at once.
+- `ee24_is_busy()` moves the job one step and returns: `true` while it runs. For a write it asks the chip whether it has stored the page, and once it has, sends the next one. For a read by polling it reads the next piece. Call it from a state machine or the main loop.
+- `ee24_wait()` waits until the job has ended and returns how it ended. While the chip or the DMA has the job it sleeps a millisecond at a time through osal, so that with an RTOS other threads run; the pieces of a read by polling it reads one after the other. Called once `ee24_is_busy()` has said `false`, it returns at once.
 
 ```c
 /* In a state machine: start the write, and come back to it. */
@@ -274,7 +284,7 @@ case STATE_SAVING:
     break;
 ```
 
-A page goes out only when `ee24_is_busy()` or `ee24_wait()` asks, so a state machine that comes back every 10 ms writes one page every 10 ms. Come back every millisecond, or less, and a write runs as fast as the chip allows.
+A page goes out, and a piece is read, only when `ee24_is_busy()` or `ee24_wait()` asks, so a state machine that comes back every 10 ms writes one page, or reads one piece, every 10 ms. Come back every millisecond, or less, and a job runs as fast as the chip and the bus allow.
 
 `ee24_wait()` also reports a call that was refused at once, past the end of the chip for one, so simple code needs only it. Until a job has ended, its buffer must stay where it is and unchanged, and any other ee24 call on that chip returns `EE24_ERR_BUSY`. Each step of a job keeps to its own time from `ee24_config.h`, and a step that takes longer ends the job with `EE24_ERR_TIMEOUT`.
 
@@ -311,7 +321,7 @@ The chip is protected from `ee24_init()` on. A write lifts the protection only w
 
 ### DMA
 
-By polling the CPU moves the data. At 400 kHz, 1 KB takes about 23 ms on the wire, and by polling the CPU sits in the HAL for those 23 ms. By DMA it is free for them, and a read returns at once, as a job. A write by DMA gains little: a page is 32 bytes at most, under a millisecond on the wire, and the chip's 5 ms to store it is free time either way. DMA pays off most for reads of a few hundred bytes or more.
+By polling the CPU moves the data. At 400 kHz, 1 KB takes about 23 ms on the wire, and by polling the CPU spends those 23 ms in the HAL, a piece per call. By DMA it is free for them. A write by DMA gains little: a page is 32 bytes at most, under a millisecond on the wire, and the chip's 5 ms to store it is free time either way. DMA pays off most for reads of a few hundred bytes or more.
 
 For DMA, set up CubeMX like this:
 
@@ -348,7 +358,7 @@ The mutex is per chip, not per bus. Two chips on one bus used from two threads a
 
 ### What is safe to call from an interrupt
 
-Nothing. A read by polling waits on the bus, `ee24_is_busy()` asks the chip over it, and with an RTOS every call takes a mutex. Hand the work to a task or to the main loop instead, for example with [seq](https://github.com/nimaltd/seq).
+Nothing. By polling each call waits on the bus for its piece, `ee24_is_busy()` asks the chip over it, and with an RTOS every call takes a mutex. Hand the work to a task or to the main loop instead, for example with [seq](https://github.com/nimaltd/seq).
 
 ---
 
@@ -357,7 +367,7 @@ Nothing. A read by polling waits on the bus, `ee24_is_busy()` asks the chip over
 | Function | What it does |
 |---|---|
 | `ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_address, uint16_t size_kbit, GPIO_TypeDef *wp_port, uint16_t wp_pin)` | Set up a handle for one chip and check that it answers. Call it once per handle |
-| `ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len)` | Read `len` bytes from `address`. With DMA, start reading them, as a job |
+| `ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len)` | Start reading `len` bytes from `address`, as a job |
 | `ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len)` | Start writing `len` bytes to `address`, as a job |
 | `bool ee24_is_busy(ee24_t *handle)` | Whether a job still runs. Checks once, moves it on, and returns at once |
 | `ee24_err_t ee24_wait(ee24_t *handle)` | Wait until the job has ended, and return how it ended |
@@ -388,7 +398,7 @@ One command does everything:
 python test/run_tests.py
 ```
 
-It configures, builds and runs the suite, then tells you plainly whether it passed. The suite is built three times: with `ee24_config.h` as it ships, by polling, then with DMA, then with every time `HAL_MAX_DELAY`. osal is replaced by a fake the tests control, so a mutex held by another thread, or refused by the RTOS, is tested with no RTOS at all. The RTOS side itself is osal's, and osal's own tests cover it. Add `--clean` to start from an empty build folder.
+It configures, builds and runs the suite, then tells you plainly whether it passed. The suite is built four times: with `ee24_config.h` as it ships, by polling, then reading 32 KB a call by polling, then with DMA, then with every time `HAL_MAX_DELAY`. osal is replaced by a fake the tests control, so a mutex held by another thread, or refused by the RTOS, is tested with no RTOS at all. The RTOS side itself is osal's, and osal's own tests cover it. Add `--clean` to start from an empty build folder.
 
 If you prefer doing it by hand:
 
@@ -415,7 +425,7 @@ The CubeMX pack is replaced by stm32-installer, and every name changed:
 | `EE24_RTOS` | `OSAL_RTOS` |
 | `EE24_RTOS_DISABLE` | `OSAL_RTOS_NONE` |
 
-Two to watch, because the compiler finds every renamed function for you, but not these. A write now returns once started, so wait for it before the next call, or before changing its buffer:
+Two to watch, because the compiler finds every renamed function for you, but not these. A read and a write now return once started, so wait for them before using the data, before the next call, or before changing a buffer:
 
 ```c
 EE24_Write(&ee24, 0, data, 16, 1000);    /* was: returned once written */
@@ -426,9 +436,10 @@ ee24_wait(&ee24);                        /* and this waits until it is written *
 And the functions used to return `true` when they worked, and now return `EE24_ERR_NONE`, which is 0:
 
 ```c
-if (EE24_Read(&ee24, 0, data, 16, 100))              /* was */
-if (ee24_read(&ee24, 0, data, 16) == EE24_ERR_NONE)  /* is now */
-if (ee24_read(&ee24, 0, data, 16))                   /* compiles, and means "if it failed" */
+if (EE24_Read(&ee24, 0, data, 16, 100))   /* was */
+ee24_read(&ee24, 0, data, 16);            /* is now */
+if (ee24_wait(&ee24) == EE24_ERR_NONE)
+if (ee24_wait(&ee24))                     /* compiles, and means "if it failed" */
 ```
 
 With an RTOS, ee24 is now called from a thread only, as [above](#with-an-rtos).

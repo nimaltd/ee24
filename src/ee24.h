@@ -54,6 +54,15 @@
 #error "EE24_TRANSFER must be EE24_TRANSFER_POLLING or EE24_TRANSFER_DMA"
 #endif
 
+/* Added after the first version, so a configuration file from before has none
+   and gets the default. A piece is one HAL transfer, which counts in 16 bits,
+   and reads are split at 32 KB anyway. */
+#ifndef EE24_POLL_CHUNK
+#define EE24_POLL_CHUNK                 256U
+#elif (EE24_POLL_CHUNK < 1) || (EE24_POLL_CHUNK > 32768)
+#error "EE24_POLL_CHUNK must be from 1 to 32768"
+#endif
+
 /* 0 is allowed here: it tries for the mutex once and does not wait. */
 #ifndef EE24_TIMEOUT_MUTEX_MS
 #error "EE24_TIMEOUT_MUTEX_MS is not defined. Add it to ee24_config.h"
@@ -165,7 +174,7 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
 
 /*****************************************************************************************************/
 /**
- * @brief Read len bytes starting at address. With DMA it is a job: it returns once started.
+ * @brief Start reading len bytes at address, as a job.
  */
 ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len);
 

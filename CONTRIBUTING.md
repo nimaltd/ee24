@@ -25,10 +25,10 @@ code that shows the problem. A failing test is even better, see below.
    python test/run_tests.py
    ```
 
-   This builds and runs the suite three times: by polling with
-   `ee24_config.h` as it ships, with DMA, and with every time
-   `HAL_MAX_DELAY`. There is no build per RTOS: ee24 reaches the RTOS only
-   through osal, and osal's own tests cover each one.
+   This builds and runs the suite four times: by polling with
+   `ee24_config.h` as it ships, by polling 32 KB a call, with DMA, and with
+   every time `HAL_MAX_DELAY`. There is no build per RTOS: ee24 reaches the
+   RTOS only through osal, and osal's own tests cover each one.
 
 3. Match the existing code style. The short version: 4 spaces and no tabs, Allman
    braces, `snake_case`, every file scope name prefixed with `ee24_`, a Doxygen
@@ -49,7 +49,7 @@ code that shows the problem. A failing test is even better, see below.
 
 Every pull request runs two jobs, and both must be green:
 
-- the full test suite on Ubuntu, in all three builds, with
+- the full test suite on Ubuntu, in all four builds, with
   `-Wall -Wextra -Wpedantic -Werror -Wundef`
 - a cross compile of `src/ee24.c` for Cortex-M4 with the same warning settings,
   against the real osal, for each RTOS by polling and by DMA

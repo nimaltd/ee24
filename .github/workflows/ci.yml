@@ -46,8 +46,8 @@ jobs:
         run: |
           flags="-mcpu=cortex-m4 -mthumb -std=c11 -Wall -Wextra -Wpedantic -Werror -Wundef -Os"
           include="-Itest/stub -Iosal/src -Iosal/test/stub"
-          timeouts="-DEE24_TIMEOUT_MUTEX_MS=HAL_MAX_DELAY -DEE24_TIMEOUT_TRANSFER_MS=35U \
-            -DEE24_TIMEOUT_PAGE_MS=15U"
+          timeouts="-DEE24_POLL_CHUNK=256U -DEE24_TIMEOUT_MUTEX_MS=HAL_MAX_DELAY \
+            -DEE24_TIMEOUT_TRANSFER_MS=35U -DEE24_TIMEOUT_PAGE_MS=15U"
           arm-none-eabi-gcc -c src/ee24.c -o /tmp/ee24.o $include $flags
           for rtos in NONE CMSIS_V1 CMSIS_V2 THREADX; do
             for transfer in POLLING DMA; do
