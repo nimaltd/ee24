@@ -37,9 +37,12 @@ requires:
 install:
   layout: mirror
 
+# The configuration header comes after the main one, which the version is
+# read from. Its settings, between its USER CODE lines, survive every update.
 files:
   headers:
     - src/ee24.h
+    - src/ee24_config.h
   sources:
     - src/ee24.c
 

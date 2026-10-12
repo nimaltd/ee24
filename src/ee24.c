@@ -22,7 +22,6 @@
 */
 
 #include "ee24.h"
-#include <stdbool.h>
 
 /*
  * ****************************************************************************************************
@@ -30,12 +29,15 @@
  * ****************************************************************************************************
 */
 
-/* How often a write asks the chip whether it has finished storing a page. */
+/* How often ee24_wait() asks whether the job has moved on. */
 #define EE24_POLL_MS            1U
 
 /* How hard ee24_init() tries to find the chip. */
 #define EE24_INIT_TRIALS        2U
 #define EE24_INIT_TIMEOUT_MS    100U
+
+/* EE24_TIMEOUT_TRANSFER_MS is for every this many bytes a transfer carries. */
+#define EE24_TRANSFER_UNIT      256U
 
 /* The HAL counts a transfer in a uint16_t, so a 24C512, 64 KB, cannot be read
    in one. Reads are split at every 32 KB instead. */
@@ -44,6 +46,12 @@
 /* One address byte reaches 256 bytes. Chips from 24C04 to 24C16 take the rest
    in the I2C address, so one transfer must not cross from one block to the next. */
 #define EE24_BLOCK_SIZE         256U
+
+/* What a job is doing. */
+#define EE24_JOB_IDLE           0U
+#define EE24_JOB_READ           1U  /* DMA bringing data in. */
+#define EE24_JOB_SEND           2U  /* DMA sending a page.   */
+#define EE24_JOB_STORE          3U  /* The chip storing it.  */
 
 /*
  * ****************************************************************************************************
@@ -73,12 +81,19 @@ static uint32_t      ee24_size_bytes(uint16_t size_kbit);
 static uint8_t       ee24_page_size(uint16_t size_kbit);
 static uint16_t      ee24_read_size(uint16_t size_kbit);
 static uint8_t       ee24_block_bits(uint16_t size_kbit);
+static ee24_err_t    ee24_page_start(ee24_t *handle);
+#if (EE24_TRANSFER == EE24_TRANSFER_DMA)
+static ee24_err_t    ee24_piece_start(ee24_t *handle);
+static ee24_err_t    ee24_job_moved(ee24_t *handle);
+#endif
+static ee24_err_t    ee24_job_stored(ee24_t *handle);
+static void          ee24_job_end(ee24_t *handle, ee24_err_t err);
 static ee24_err_t    ee24_range(const ee24_t *handle, uint32_t address, size_t len);
 static uint32_t      ee24_chunk(uint32_t address, size_t left, uint32_t boundary);
 static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address);
+static uint32_t      ee24_transfer_time(uint32_t bytes);
 static uint32_t      ee24_remaining(uint32_t start, uint32_t timeout_ms);
-static ee24_err_t    ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, uint32_t start,
-                                     uint32_t timeout_ms);
+static ee24_err_t    ee24_i2c_error(const ee24_t *handle, HAL_StatusTypeDef status);
 static void          ee24_write_protect(const ee24_t *handle, GPIO_PinState state);
 
 /*
@@ -116,6 +131,11 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
            refuse it. It stays 0 until every step below has worked, so a
            handle whose setup failed half way is never used. */
         handle->size = 0U;
+
+        /* No job runs on a new handle. Left as it was, a handle full of
+           rubbish would refuse every call as busy. */
+        handle->job_state  = EE24_JOB_IDLE;
+        handle->job_result = EE24_ERR_NONE;
 
         /* A size that is not a 24xx part is refused here, before anything is
            sent to the bus. */
@@ -178,22 +198,24 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
 /**
  * @brief Read len bytes starting at address. Not from an interrupt.
  *
- * @param[in,out] handle      Handle from ee24_init().
- * @param[in]     address     First byte to read.
- * @param[out]    data        Where the bytes go.
- * @param[in]     len         Bytes to read, up to the end of the chip.
- * @param[in]     timeout_ms  Time for the whole call. HAL_MAX_DELAY waits for ever.
+ * By polling it returns with the data read. With EE24_TRANSFER_DMA it is a job:
+ * it returns once the read has started, and ee24_is_busy() or ee24_wait() says
+ * when it has finished. Until then the data is not there yet, and the buffer
+ * must stay where it is.
+ *
+ * @param[in,out] handle   Handle from ee24_init().
+ * @param[in]     address  First byte to read.
+ * @param[out]    data     Where the bytes go. With DMA, in memory the DMA can reach.
+ * @param[in]     len      Bytes to read, up to the end of the chip.
  * @return EE24_ERR_NONE, or the EE24_ERR_ value that says what went wrong.
  */
-ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len,
-                     uint32_t timeout_ms)
+ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len)
 {
-    /* The clock starts now, so a wait for the mutex counts against the
-       timeout as well. */
-    uint32_t   start = HAL_GetTick();
-    ee24_err_t err   = EE24_ERR_INVALID;
-    osal_err_t lock  = OSAL_ERR_NONE;
-    size_t     done  = 0U;
+    ee24_err_t err  = EE24_ERR_INVALID;
+    osal_err_t lock = OSAL_ERR_NONE;
+#if (EE24_TRANSFER == EE24_TRANSFER_POLLING)
+    size_t     done = 0U;
+#endif
 
     assert_param(handle != NULL);
     assert_param(data != NULL);
@@ -208,6 +230,13 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
             break;
         }
 
+        /* One job at a time. ee24_is_busy() says when the last has ended. */
+        if (handle->job_state != EE24_JOB_IDLE)
+        {
+            err = EE24_ERR_BUSY;
+            break;
+        }
+
         /* Nothing goes to the bus for a range past the end of the chip, and
            nothing at all for 0 bytes, which succeeds. */
         err = ee24_range(handle, address, len);
@@ -219,7 +248,7 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
 
         /* One thread at a time. Without an RTOS osal takes nothing and this
            always succeeds. */
-        lock = osal_mutex_lock(&handle->mutex, timeout_ms);
+        lock = osal_mutex_lock(&handle->mutex, EE24_TIMEOUT_MUTEX_MS);
 
         if (lock == OSAL_ERR_TIMEOUT)
         {
@@ -235,63 +264,74 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
             break;
         }
 
+#if (EE24_TRANSFER == EE24_TRANSFER_DMA)
+        /* No break from here on: the mutex is held until the job ends. The DMA
+           brings the data in a piece at a time, and ee24_is_busy() starts each
+           piece after the first. */
+        handle->job_state   = EE24_JOB_READ;
+        handle->job_data    = data;
+        handle->job_len     = len;
+        handle->job_done    = 0U;
+        handle->job_address = address;
+        err                 = ee24_piece_start(handle);
+
+        if (err != EE24_ERR_NONE)
+        {
+            ee24_job_end(handle, err);
+        }
+#else
         /* No break from here on: the mutex is held, and is given back below.
            Read in pieces: 24C04 to 24C16 put each 256 byte block at its own
            I2C address, and the HAL cannot count a whole 24C512 at once. */
         while ((err == EE24_ERR_NONE) && (done < len))
         {
-            uint32_t      at     = address + (uint32_t)done;
-            uint32_t      chunk  = ee24_chunk(at, len - done, handle->read_size);
-            ee24_target_t target = ee24_target(handle, at);
-            uint32_t      left   = ee24_remaining(start, timeout_ms);
+            uint32_t          at     = address + (uint32_t)done;
+            uint32_t          chunk  = ee24_chunk(at, len - done, handle->read_size);
+            ee24_target_t     target = ee24_target(handle, at);
+            HAL_StatusTypeDef status = HAL_OK;
 
-            if (left == 0U)
-            {
-                /* Out of time before the next piece. */
-                err = EE24_ERR_TIMEOUT;
-            }
-            else if (HAL_I2C_Mem_Read(handle->hi2c, target.dev_address, target.mem_address,
-                                      target.mem_size, &data[done], (uint16_t)chunk, left) != HAL_OK)
-            {
-                /* The HAL gets only what is left of the timeout, so the call
-                   as a whole keeps to it. */
-                err = EE24_ERR_I2C;
-            }
-            else
-            {
-                done += chunk;
-            }
+            /* Each piece gets the time its size needs, so a 32 KB piece gets
+               128 times what a short one gets. */
+            status = HAL_I2C_Mem_Read(handle->hi2c, target.dev_address, target.mem_address,
+                                      target.mem_size, &data[done], (uint16_t)chunk,
+                                      ee24_transfer_time(chunk));
+            err    = ee24_i2c_error(handle, status);
+            done  += chunk;
         }
 
         /* Give the chip back to other threads, error or not. */
         osal_mutex_unlock(&handle->mutex);
+#endif
     }
     while (false);
+
+    /* What ee24_wait() reports. A job started here, or one still running,
+       puts its own result over this when it ends. */
+    handle->job_result = err;
 
     return err;
 }
 
 /*****************************************************************************************************/
 /**
- * @brief Write len bytes starting at address. Not from an interrupt.
+ * @brief Start writing len bytes starting at address. Not from an interrupt.
  *
- * @param[in,out] handle      Handle from ee24_init().
- * @param[in]     address     First byte to write.
- * @param[in]     data        The bytes to write.
- * @param[in]     len         Bytes to write, up to the end of the chip.
- * @param[in]     timeout_ms  Time for the whole call. HAL_MAX_DELAY waits for ever.
- * @return EE24_ERR_NONE, or the EE24_ERR_ value that says what went wrong. After
- *         an error, the pages before the failing one are written.
+ * A job: it returns once the first page has started, and ee24_is_busy() sends
+ * each of the others once the chip has stored the one before. ee24_is_busy()
+ * or ee24_wait() says when the last is stored. Until then the buffer must stay
+ * as it is.
+ *
+ * @param[in,out] handle   Handle from ee24_init().
+ * @param[in]     address  First byte to write.
+ * @param[in]     data     The bytes to write. With DMA, in memory the DMA can reach.
+ * @param[in]     len      Bytes to write, up to the end of the chip.
+ * @return EE24_ERR_NONE once started, or the EE24_ERR_ value that says what
+ *         went wrong. After an error, the pages before the failing one are written.
  */
-ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len,
-                      uint32_t timeout_ms)
+ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len)
 {
-    /* The clock starts now, so a wait for the mutex counts against the
-       timeout as well. */
-    uint32_t   start = HAL_GetTick();
-    ee24_err_t err   = EE24_ERR_INVALID;
-    osal_err_t lock  = OSAL_ERR_NONE;
-    size_t     done  = 0U;
+    ee24_err_t err  = EE24_ERR_INVALID;
+    osal_err_t lock = OSAL_ERR_NONE;
 
     assert_param(handle != NULL);
     assert_param(data != NULL);
@@ -306,6 +346,13 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
             break;
         }
 
+        /* One job at a time. ee24_is_busy() says when the last has ended. */
+        if (handle->job_state != EE24_JOB_IDLE)
+        {
+            err = EE24_ERR_BUSY;
+            break;
+        }
+
         /* Nothing goes to the bus for a range past the end of the chip, and
            nothing at all for 0 bytes, which succeeds. */
         err = ee24_range(handle, address, len);
@@ -317,7 +364,7 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
 
         /* One thread at a time. Without an RTOS osal takes nothing and this
            always succeeds. */
-        lock = osal_mutex_lock(&handle->mutex, timeout_ms);
+        lock = osal_mutex_lock(&handle->mutex, EE24_TIMEOUT_MUTEX_MS);
 
         if (lock == OSAL_ERR_TIMEOUT)
         {
@@ -333,50 +380,101 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
             break;
         }
 
-        /* No break from here on: the mutex is held and write protect is off,
-           and both are put back below. Write a page at a time. Sent more than
-           a page, the chip wraps round inside it and overwrites what it has
-           just been given. */
+        /* No break from here on: the mutex is held and write protect is off
+           until the job ends. A page at a time: sent more than a page, the
+           chip wraps round inside it and overwrites what it has just been
+           given. The HAL takes a pointer to non-const, but sending only reads
+           through it, so casting the const away is safe. */
         ee24_write_protect(handle, GPIO_PIN_RESET);
 
-        while ((err == EE24_ERR_NONE) && (done < len))
+        handle->job_data    = (uint8_t *)data;
+        handle->job_len     = len;
+        handle->job_done    = 0U;
+        handle->job_address = address;
+        err                 = ee24_page_start(handle);
+
+        if (err != EE24_ERR_NONE)
         {
-            uint32_t      at     = address + (uint32_t)done;
-            uint32_t      chunk  = ee24_chunk(at, len - done, handle->page_size);
-            ee24_target_t target = ee24_target(handle, at);
-            uint32_t      left   = ee24_remaining(start, timeout_ms);
-
-            /* The HAL takes a pointer to non-const, but a write only reads
-               through it, so casting the const away here is safe. */
-            uint8_t *bytes = (uint8_t *)&data[done];
-
-            if (left == 0U)
-            {
-                /* Out of time before the next page. */
-                err = EE24_ERR_TIMEOUT;
-            }
-            else if (HAL_I2C_Mem_Write(handle->hi2c, target.dev_address, target.mem_address,
-                                       target.mem_size, bytes, (uint16_t)chunk, left) != HAL_OK)
-            {
-                err = EE24_ERR_I2C;
-            }
-            else
-            {
-                /* The chip stores the page after the transfer ends, and does
-                   not answer anything until it has. So the next page, or the
-                   caller's next call, waits for it here. */
-                err = ee24_wait_ready(handle, target.dev_address, start, timeout_ms);
-                done += chunk;
-            }
+            ee24_job_end(handle, err);
         }
-
-        /* Protected again and given back on every way out, errors included. */
-        ee24_write_protect(handle, GPIO_PIN_SET);
-        osal_mutex_unlock(&handle->mutex);
     }
     while (false);
 
+    /* What ee24_wait() reports. A job started here, or one still running,
+       puts its own result over this when it ends. */
+    handle->job_result = err;
+
     return err;
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Whether a job is still running. Moves it on, and returns at once. Not from an interrupt.
+ *
+ * A job is a write, or with DMA a read too. Each call checks once: it asks the
+ * chip, or the HAL with DMA, whether the piece under way has finished, and if
+ * it has, starts the next page or piece. Call it from the thread that started
+ * the job, which holds the mutex until the job ends. Once it returns false,
+ * ee24_wait() says how the job ended.
+ *
+ * @param[in,out] handle  Handle from ee24_init().
+ * @return true while the job runs, false once it has ended or when none runs.
+ */
+bool ee24_is_busy(ee24_t *handle)
+{
+    ee24_err_t err = EE24_ERR_NONE;
+
+    assert_param(handle != NULL);
+
+    if (handle->job_state == EE24_JOB_STORE)
+    {
+        /* The chip is storing a page: ask it once whether it has finished. */
+        err = ee24_job_stored(handle);
+    }
+#if (EE24_TRANSFER == EE24_TRANSFER_DMA)
+    else if (handle->job_state != EE24_JOB_IDLE)
+    {
+        /* Data is moving: ask the HAL once whether the DMA has finished. */
+        err = ee24_job_moved(handle);
+    }
+#endif
+    else
+    {
+        /* Nothing runs. */
+    }
+
+    /* Ended, well or not: the chip and the mutex are given back, and how it
+       ended is kept for ee24_wait(). */
+    if ((err != EE24_ERR_BUSY) && (handle->job_state != EE24_JOB_IDLE))
+    {
+        ee24_job_end(handle, err);
+    }
+
+    return (err == EE24_ERR_BUSY);
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Wait until the running job has ended, and say how it ended. Not from an interrupt.
+ *
+ * Asks first, so after ee24_is_busy() has returned false, or after a call that
+ * finished or was refused at once, it returns straight away. Between the
+ * questions it sleeps a millisecond through osal, so with an RTOS other
+ * threads run. Call it from the thread that started the job.
+ *
+ * @param[in,out] handle  Handle from ee24_init().
+ * @return How the last read or write ended: EE24_ERR_NONE when it worked.
+ */
+ee24_err_t ee24_wait(ee24_t *handle)
+{
+    assert_param(handle != NULL);
+
+    while (ee24_is_busy(handle))
+    {
+        osal_delay_ms(EE24_POLL_MS);
+    }
+
+    return handle->job_result;
 }
 
 /*
@@ -515,6 +613,201 @@ static uint8_t ee24_block_bits(uint16_t size_kbit)
 
 /*****************************************************************************************************/
 /**
+ * @brief Send the next page of a write job, by polling or DMA.
+ *
+ * @param[in,out] handle  Handle of the chip, with a write job under way.
+ * @return EE24_ERR_NONE once sent, or the EE24_ERR_ value that says what went wrong.
+ */
+static ee24_err_t ee24_page_start(ee24_t *handle)
+{
+    uint32_t          at     = handle->job_address + (uint32_t)handle->job_done;
+    ee24_target_t     target = ee24_target(handle, at);
+    HAL_StatusTypeDef status = HAL_OK;
+
+    /* From here to the end of the page, or less when that is all there is. */
+    handle->job_step    = ee24_chunk(at, handle->job_len - handle->job_done, handle->page_size);
+    handle->job_start   = HAL_GetTick();
+    handle->job_timeout = ee24_transfer_time(handle->job_step);
+
+#if (EE24_TRANSFER == EE24_TRANSFER_DMA)
+    /* The DMA sends the page, and ee24_is_busy() sees it go. */
+    handle->job_state = EE24_JOB_SEND;
+    status            = HAL_I2C_Mem_Write_DMA(handle->hi2c, target.dev_address, target.mem_address,
+                                              target.mem_size, &handle->job_data[handle->job_done],
+                                              (uint16_t)handle->job_step);
+#else
+    status = HAL_I2C_Mem_Write(handle->hi2c, target.dev_address, target.mem_address,
+                               target.mem_size, &handle->job_data[handle->job_done],
+                               (uint16_t)handle->job_step, handle->job_timeout);
+
+    /* The chip stores the page once the transfer ends, and does not answer
+       anything until it has. Its time starts now. */
+    handle->job_state   = EE24_JOB_STORE;
+    handle->job_start   = HAL_GetTick();
+    handle->job_timeout = EE24_TIMEOUT_PAGE_MS;
+#endif
+
+    return ee24_i2c_error(handle, status);
+}
+
+#if (EE24_TRANSFER == EE24_TRANSFER_DMA)
+
+/*****************************************************************************************************/
+/**
+ * @brief Start the DMA on the next piece of a read job.
+ *
+ * @param[in,out] handle  Handle of the chip, with a read job under way.
+ * @return EE24_ERR_NONE once started, or the EE24_ERR_ value that says what went wrong.
+ */
+static ee24_err_t ee24_piece_start(ee24_t *handle)
+{
+    uint32_t          at     = handle->job_address + (uint32_t)handle->job_done;
+    ee24_target_t     target = ee24_target(handle, at);
+    HAL_StatusTypeDef status = HAL_OK;
+
+    /* To the end of the block, or 32 KB, or less when that is all there is.
+       Each piece is a transfer of its own, with its own address. */
+    handle->job_step    = ee24_chunk(at, handle->job_len - handle->job_done, handle->read_size);
+    handle->job_start   = HAL_GetTick();
+    handle->job_timeout = ee24_transfer_time(handle->job_step);
+
+    status = HAL_I2C_Mem_Read_DMA(handle->hi2c, target.dev_address, target.mem_address,
+                                  target.mem_size, &handle->job_data[handle->job_done],
+                                  (uint16_t)handle->job_step);
+
+    return ee24_i2c_error(handle, status);
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Ask the HAL once whether the DMA has finished, and go on when it has.
+ *
+ * @param[in,out] handle  Handle of the chip, with data moving.
+ * @return EE24_ERR_BUSY while the job runs, EE24_ERR_NONE when a read is done,
+ *         or what went wrong.
+ */
+static ee24_err_t ee24_job_moved(ee24_t *handle)
+{
+    ee24_err_t err = EE24_ERR_BUSY;
+
+    if (HAL_I2C_GetState(handle->hi2c) != HAL_I2C_STATE_READY)
+    {
+        if (ee24_remaining(handle->job_start, handle->job_timeout) == 0U)
+        {
+            /* Stuck: the bus held low, or the DMA or the I2C interrupt not
+               running. The HAL has no way to stop a memory transfer part way,
+               so the I2C is set up again from scratch, which CubeMX's
+               HAL_I2C_MspInit() does with its DMA. Left as it is, the HAL
+               would refuse every later transfer as busy. */
+            (void)HAL_I2C_DeInit(handle->hi2c);
+            (void)HAL_I2C_Init(handle->hi2c);
+            err = EE24_ERR_TIMEOUT;
+        }
+    }
+    else if (HAL_I2C_GetError(handle->hi2c) != HAL_I2C_ERROR_NONE)
+    {
+        /* Finished is not the same as finished well: no acknowledge, or a
+           DMA error. */
+        err = EE24_ERR_I2C;
+    }
+    else if (handle->job_state == EE24_JOB_SEND)
+    {
+        /* The page is out. The chip stores it now, and its time starts. */
+        handle->job_state   = EE24_JOB_STORE;
+        handle->job_start   = HAL_GetTick();
+        handle->job_timeout = EE24_TIMEOUT_PAGE_MS;
+    }
+    else
+    {
+        /* A piece of a read is in: on to the next, if there is one. */
+        handle->job_done += handle->job_step;
+
+        if (handle->job_done < handle->job_len)
+        {
+            err = ee24_piece_start(handle);
+            err = (err == EE24_ERR_NONE) ? EE24_ERR_BUSY : err;
+        }
+        else
+        {
+            err = EE24_ERR_NONE;
+        }
+    }
+
+    return err;
+}
+
+#endif /* EE24_TRANSFER == EE24_TRANSFER_DMA */
+
+/*****************************************************************************************************/
+/**
+ * @brief Ask the chip once whether it has stored the page, and send the next one if so.
+ *
+ * @param[in,out] handle  Handle of the chip, storing a page.
+ * @return EE24_ERR_BUSY while the job runs, EE24_ERR_NONE when it is done, or
+ *         what went wrong.
+ */
+static ee24_err_t ee24_job_stored(ee24_t *handle)
+{
+    uint32_t      at     = handle->job_address + (uint32_t)handle->job_done;
+    ee24_target_t target = ee24_target(handle, at);
+    ee24_err_t    err    = EE24_ERR_BUSY;
+
+    /* A chip busy storing a page does not acknowledge its address, so an
+       answer means it has finished. This is the method the datasheets give,
+       and it is usually well under the 5 to 10 ms a fixed wait would have to
+       allow. The question is one byte long. */
+    if (HAL_I2C_IsDeviceReady(handle->hi2c, target.dev_address, 1U, ee24_transfer_time(1U))
+        == HAL_OK)
+    {
+        /* Stored: on to the next page, if there is one. */
+        handle->job_done += handle->job_step;
+
+        if (handle->job_done < handle->job_len)
+        {
+            err = ee24_page_start(handle);
+            err = (err == EE24_ERR_NONE) ? EE24_ERR_BUSY : err;
+        }
+        else
+        {
+            err = EE24_ERR_NONE;
+        }
+    }
+    else if (ee24_remaining(handle->job_start, handle->job_timeout) == 0U)
+    {
+        /* Still storing, long past what any chip needs. */
+        err = EE24_ERR_TIMEOUT;
+    }
+    else
+    {
+        /* Still storing. */
+    }
+
+    return err;
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief End a job: protect the chip again, give the mutex back, and keep how it ended.
+ *
+ * @param[in,out] handle  Handle of the chip.
+ * @param[in]     err     How the job ended.
+ */
+static void ee24_job_end(ee24_t *handle, ee24_err_t err)
+{
+    /* A write lifted write protect for the job, on every way out, errors
+       included. A read never touched it. */
+    if (handle->job_state != EE24_JOB_READ)
+    {
+        ee24_write_protect(handle, GPIO_PIN_SET);
+    }
+
+    handle->job_state  = EE24_JOB_IDLE;
+    handle->job_result = err;
+    osal_mutex_unlock(&handle->mutex);
+}
+
+/*****************************************************************************************************/
+/**
  * @brief Check that a transfer stays inside the chip.
  *
  * @param[in] handle   Handle of the chip.
@@ -600,10 +893,33 @@ static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address)
 
 /*****************************************************************************************************/
 /**
+ * @brief The time a transfer of this many bytes may take.
+ *
+ * @param[in] bytes  Bytes the transfer carries.
+ * @return Milliseconds, or HAL_MAX_DELAY to wait for ever.
+ */
+static uint32_t ee24_transfer_time(uint32_t bytes)
+{
+    uint32_t time = HAL_MAX_DELAY;
+
+#if EE24_TIMEOUT_TRANSFER_MS != HAL_MAX_DELAY
+    /* The setting is for every 256 bytes, rounded up, so a page gets it once
+       and a 32 KB read 128 times. */
+    time = ((bytes + (EE24_TRANSFER_UNIT - 1U)) / EE24_TRANSFER_UNIT) * EE24_TIMEOUT_TRANSFER_MS;
+#else
+    /* For ever stays for ever. Multiplied, it would wrap round to a short time. */
+    (void)bytes;
+#endif
+
+    return time;
+}
+
+/*****************************************************************************************************/
+/**
  * @brief Milliseconds left of a timeout.
  *
- * @param[in] start       HAL_GetTick() when the call began.
- * @param[in] timeout_ms  The caller's timeout.
+ * @param[in] start       HAL_GetTick() when the step began.
+ * @param[in] timeout_ms  The time the step may take.
  * @return Milliseconds left, or 0 once it has run out.
  */
 static uint32_t ee24_remaining(uint32_t start, uint32_t timeout_ms)
@@ -614,13 +930,16 @@ static uint32_t ee24_remaining(uint32_t start, uint32_t timeout_ms)
 
     if (timeout_ms == HAL_MAX_DELAY)
     {
-        /* Keep the HAL sentinel: subtracting elapsed time turns an unlimited
-           wait into a finite timeout in every transfer after the first. */
+        /* For ever never runs out. */
         left = HAL_MAX_DELAY;
     }
     else if (elapsed < timeout_ms)
     {
         left = timeout_ms - elapsed;
+    }
+    else
+    {
+        /* Run out. */
     }
 
     return left;
@@ -628,39 +947,24 @@ static uint32_t ee24_remaining(uint32_t start, uint32_t timeout_ms)
 
 /*****************************************************************************************************/
 /**
- * @brief Wait until the chip has stored the page it was just sent.
+ * @brief Turn what the HAL returned into an ee24 error.
  *
- * @param[in] handle       Handle of the chip.
- * @param[in] dev_address  I2C address the page went to.
- * @param[in] start        HAL_GetTick() when the call began.
- * @param[in] timeout_ms   The caller's timeout.
- * @return EE24_ERR_NONE or EE24_ERR_TIMEOUT.
+ * @param[in] handle  Handle of the chip.
+ * @param[in] status  What the HAL returned.
+ * @return EE24_ERR_NONE, EE24_ERR_TIMEOUT or EE24_ERR_I2C.
  */
-static ee24_err_t ee24_wait_ready(const ee24_t *handle, uint16_t dev_address, uint32_t start,
-                                  uint32_t timeout_ms)
+static ee24_err_t ee24_i2c_error(const ee24_t *handle, HAL_StatusTypeDef status)
 {
-    ee24_err_t err  = EE24_ERR_TIMEOUT;
-    uint32_t   left = 0U;
+    ee24_err_t err = EE24_ERR_NONE;
 
-    do
+    if (status != HAL_OK)
     {
-        /* Sleep first: no chip stores a page in under a millisecond, so
-           asking straight away would only waste a question. With an RTOS
-           other threads run meanwhile, and without one it is HAL_Delay(). */
-        osal_delay_ms(EE24_POLL_MS);
-
-        left = ee24_remaining(start, timeout_ms);
-
-        /* A chip busy storing a page does not acknowledge its address, so an
-           answer means it has finished. This is the method the datasheets
-           give, and it is usually well under the 5 to 10 ms a fixed wait
-           would have to allow. */
-        if ((left > 0U) && (HAL_I2C_IsDeviceReady(handle->hi2c, dev_address, 1U, left) == HAL_OK))
-        {
-            err = EE24_ERR_NONE;
-        }
+        /* A transfer that ran out of time comes back as HAL_ERROR on some
+           families and HAL_TIMEOUT on others, but the HAL notes it in the
+           error code on all of them. */
+        err = ((HAL_I2C_GetError(handle->hi2c) & HAL_I2C_ERROR_TIMEOUT) != 0U) ? EE24_ERR_TIMEOUT
+                                                                               : EE24_ERR_I2C;
     }
-    while ((err != EE24_ERR_NONE) && (left > 0U));
 
     return err;
 }

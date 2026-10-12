@@ -50,6 +50,12 @@
 
 #define GPIO_PIN_5              ((uint16_t)0x0020U)
 
+/* What HAL_I2C_GetError() reports, with the HAL's own values. */
+#define HAL_I2C_ERROR_NONE      0x00000000U
+#define HAL_I2C_ERROR_AF        0x00000004U
+#define HAL_I2C_ERROR_DMA       0x00000010U
+#define HAL_I2C_ERROR_TIMEOUT   0x00000020U
+
 /*
  * ****************************************************************************************************
  * Types
@@ -68,6 +74,20 @@ typedef enum
     HAL_TIMEOUT = 0x03U,
 
 } HAL_StatusTypeDef;
+
+/*****************************************************************************************************/
+/**
+ * @brief I2C state, with the HAL's own values. Only READY means a transfer has ended.
+ */
+typedef enum
+{
+    HAL_I2C_STATE_RESET   = 0x00U,
+    HAL_I2C_STATE_READY   = 0x20U,
+    HAL_I2C_STATE_BUSY    = 0x24U,
+    HAL_I2C_STATE_BUSY_TX = 0x21U,
+    HAL_I2C_STATE_BUSY_RX = 0x22U,
+
+} HAL_I2C_StateTypeDef;
 
 /*****************************************************************************************************/
 /**
@@ -146,6 +166,46 @@ HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t DevAddress,
  */
 HAL_StatusTypeDef HAL_I2C_IsDeviceReady(I2C_HandleTypeDef *hi2c, uint16_t DevAddress,
                                         uint32_t Trials, uint32_t Timeout);
+
+/*****************************************************************************************************/
+/**
+ * @brief Write to the modelled chip by DMA, finishing later on the tests' clock.
+ */
+HAL_StatusTypeDef HAL_I2C_Mem_Write_DMA(I2C_HandleTypeDef *hi2c, uint16_t DevAddress,
+                                        uint16_t MemAddress, uint16_t MemAddSize, uint8_t *pData,
+                                        uint16_t Size);
+
+/*****************************************************************************************************/
+/**
+ * @brief Read from the modelled chip by DMA, finishing later on the tests' clock.
+ */
+HAL_StatusTypeDef HAL_I2C_Mem_Read_DMA(I2C_HandleTypeDef *hi2c, uint16_t DevAddress,
+                                       uint16_t MemAddress, uint16_t MemAddSize, uint8_t *pData,
+                                       uint16_t Size);
+
+/*****************************************************************************************************/
+/**
+ * @brief Whether a DMA transfer is still running.
+ */
+HAL_I2C_StateTypeDef HAL_I2C_GetState(I2C_HandleTypeDef *hi2c);
+
+/*****************************************************************************************************/
+/**
+ * @brief The error the last transfer ended with.
+ */
+uint32_t HAL_I2C_GetError(I2C_HandleTypeDef *hi2c);
+
+/*****************************************************************************************************/
+/**
+ * @brief Take the I2C down, which stops a DMA transfer.
+ */
+HAL_StatusTypeDef HAL_I2C_DeInit(I2C_HandleTypeDef *hi2c);
+
+/*****************************************************************************************************/
+/**
+ * @brief Set the I2C up again.
+ */
+HAL_StatusTypeDef HAL_I2C_Init(I2C_HandleTypeDef *hi2c);
 
 /*****************************************************************************************************/
 /**

@@ -25,8 +25,10 @@ code that shows the problem. A failing test is even better, see below.
    python test/run_tests.py
    ```
 
-   This builds and runs the suite. There is one build: ee24 reaches the RTOS
-   only through osal, and osal's own tests cover each RTOS.
+   This builds and runs the suite three times: by polling with
+   `ee24_config.h` as it ships, with DMA, and with every time
+   `HAL_MAX_DELAY`. There is no build per RTOS: ee24 reaches the RTOS only
+   through osal, and osal's own tests cover each one.
 
 3. Match the existing code style. The short version: 4 spaces and no tabs, Allman
    braces, `snake_case`, every file scope name prefixed with `ee24_`, a Doxygen
@@ -39,17 +41,18 @@ code that shows the problem. A failing test is even better, see below.
    ```
 
 4. Keep vendor code out of the library. `src/ee24.h` includes only the standard
-   headers, `main.h` for the HAL's types, and `osal.h` for the mutex and the
-   waits. Nothing RTOS specific belongs in ee24: it goes in osal. That is what
-   lets the tests replace all of them on a PC.
+   headers, `main.h` for the HAL's types, `osal.h` for the mutex and the
+   waits, and `ee24_config.h`. Nothing RTOS specific belongs in ee24: it goes
+   in osal. That is what lets the tests replace all of them on a PC.
 
 ## What CI checks
 
 Every pull request runs two jobs, and both must be green:
 
-- the full test suite on Ubuntu, with `-Wall -Wextra -Wpedantic -Werror`
+- the full test suite on Ubuntu, in all three builds, with
+  `-Wall -Wextra -Wpedantic -Werror -Wundef`
 - a cross compile of `src/ee24.c` for Cortex-M4 with the same warning settings,
-  against the real osal, once for each RTOS setting
+  against the real osal, for each RTOS by polling and by DMA
 
 Warnings are errors, so a build that warns will not merge.
 

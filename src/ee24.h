@@ -24,11 +24,57 @@
  * ****************************************************************************************************
 */
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "main.h"
 #include "osal.h"
+#include "ee24_config.h"
+
+/*
+ * ****************************************************************************************************
+ * Configuration checks
+ * ****************************************************************************************************
+*/
+
+/* Checked here and never in ee24_config.h. The part of that file between its
+   USER CODE markers is the user's and survives every update, so a check in it
+   could be edited away, and one added later would never reach it. */
+
+/* The values EE24_TRANSFER can take. They start at 1 on purpose: a misspelt
+   name counts as 0 inside #if, and 0 is then refused below instead of quietly
+   meaning one of them. */
+#define EE24_TRANSFER_POLLING   1
+#define EE24_TRANSFER_DMA       2
+
+#ifndef EE24_TRANSFER
+#error "EE24_TRANSFER is not defined. Add it to ee24_config.h"
+#elif (EE24_TRANSFER != EE24_TRANSFER_POLLING) && (EE24_TRANSFER != EE24_TRANSFER_DMA)
+#error "EE24_TRANSFER must be EE24_TRANSFER_POLLING or EE24_TRANSFER_DMA"
+#endif
+
+/* 0 is allowed here: it tries for the mutex once and does not wait. */
+#ifndef EE24_TIMEOUT_MUTEX_MS
+#error "EE24_TIMEOUT_MUTEX_MS is not defined. Add it to ee24_config.h"
+#endif
+
+/* The others must allow some time, or every call would time out. The transfer
+   time is multiplied by up to 128, for a 32 KB read, so a bigger one would
+   wrap round to a short time. */
+#ifndef EE24_TIMEOUT_TRANSFER_MS
+#error "EE24_TIMEOUT_TRANSFER_MS is not defined. Add it to ee24_config.h"
+#elif EE24_TIMEOUT_TRANSFER_MS == 0
+#error "EE24_TIMEOUT_TRANSFER_MS must be greater than 0"
+#elif (EE24_TIMEOUT_TRANSFER_MS > 1000000U) && (EE24_TIMEOUT_TRANSFER_MS != HAL_MAX_DELAY)
+#error "EE24_TIMEOUT_TRANSFER_MS must be at most 1000000, or HAL_MAX_DELAY to wait for ever"
+#endif
+
+#ifndef EE24_TIMEOUT_PAGE_MS
+#error "EE24_TIMEOUT_PAGE_MS is not defined. Add it to ee24_config.h"
+#elif EE24_TIMEOUT_PAGE_MS == 0
+#error "EE24_TIMEOUT_PAGE_MS must be greater than 0"
+#endif
 
 #ifdef __cplusplus
 extern "C"
@@ -66,12 +112,13 @@ extern "C"
  */
 typedef enum
 {
-    EE24_ERR_NONE    = 0, /**< Done.                                                  */
+    EE24_ERR_NONE    = 0, /**< Done, or for a job, started: see ee24_wait().          */
     EE24_ERR_INVALID = 1, /**< An unknown size, or a handle with no ee24_init().     */
     EE24_ERR_RANGE   = 2, /**< The address and length run past the end of the chip.  */
     EE24_ERR_I2C     = 3, /**< The chip did not answer, or the I2C transfer failed.  */
-    EE24_ERR_TIMEOUT = 4, /**< Not finished in time, waiting for the mutex included. */
+    EE24_ERR_TIMEOUT = 4, /**< Not finished in the time ee24_config.h allows.        */
     EE24_ERR_MUTEX   = 5, /**< The RTOS could not create or take the mutex.          */
+    EE24_ERR_BUSY    = 6, /**< A job is still running: see ee24_is_busy().          */
 
 } ee24_err_t;
 
@@ -89,6 +136,15 @@ typedef struct
     uint16_t          mem_size;     /**< I2C_MEMADD_SIZE_8BIT or _16BIT.                */
     uint8_t           page_size;    /**< Most one write may carry without wrapping.     */
     uint8_t           dev_address;  /**< I2C address, with the pins the chip ignores 0. */
+    uint8_t           job_state;    /**< What the running job is doing.                 */
+    ee24_err_t        job_result;   /**< How the last job ended, for ee24_wait().       */
+    uint8_t           *job_data;    /**< The caller's buffer.                           */
+    size_t            job_len;      /**< Bytes in the whole job.                        */
+    size_t            job_done;     /**< Bytes finished so far.                         */
+    uint32_t          job_address;  /**< Where in the chip the job starts.              */
+    uint32_t          job_step;     /**< Bytes in the piece under way.                  */
+    uint32_t          job_start;    /**< HAL_GetTick() when that piece started.         */
+    uint32_t          job_timeout;  /**< Time that piece may take.                      */
     osal_mutex_t      mutex;        /**< Lets one thread use the chip at a time.        */
 
 } ee24_t;
@@ -109,17 +165,27 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
 
 /*****************************************************************************************************/
 /**
- * @brief Read len bytes starting at address. The timeout covers the whole call.
+ * @brief Read len bytes starting at address. With DMA it is a job: it returns once started.
  */
-ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len,
-                     uint32_t timeout_ms);
+ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len);
 
 /*****************************************************************************************************/
 /**
- * @brief Write len bytes starting at address. The timeout covers the whole call.
+ * @brief Start writing len bytes at address, as a job.
  */
-ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len,
-                      uint32_t timeout_ms);
+ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len);
+
+/*****************************************************************************************************/
+/**
+ * @brief Whether a job is still running. Moves it on, and returns at once.
+ */
+bool ee24_is_busy(ee24_t *handle);
+
+/*****************************************************************************************************/
+/**
+ * @brief Wait until the running job has ended, and say how it ended.
+ */
+ee24_err_t ee24_wait(ee24_t *handle);
 
 #ifdef __cplusplus
 }
