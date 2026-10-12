@@ -40,7 +40,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   DMA. `ee24_is_busy()` moves it on and says whether it still runs, and
   `ee24_wait()` waits for it, so code that read or wrote and then went
   straight on needs an `ee24_wait()` after the call. By polling a read moves
-  at most `EE24_POLL_CHUNK` bytes per call, 256 as shipped.
+  at most `EE24_POLL_CHUNK` bytes per call, 32 as shipped, as long as
+  writing a page takes.
 - **No timeout argument.** The times are set once in `ee24_config.h`, for each
   step: `EE24_TIMEOUT_MUTEX_MS` for the mutex, `EE24_TIMEOUT_TRANSFER_MS` for
   every 256 bytes a transfer carries, so a long read gets time for its size,

@@ -58,7 +58,7 @@
    and gets the default. A piece is one HAL transfer, which counts in 16 bits,
    and reads are split at 32 KB anyway. */
 #ifndef EE24_POLL_CHUNK
-#define EE24_POLL_CHUNK                 256U
+#define EE24_POLL_CHUNK                 32U
 #elif (EE24_POLL_CHUNK < 1) || (EE24_POLL_CHUNK > 32768)
 #error "EE24_POLL_CHUNK must be from 1 to 32768"
 #endif

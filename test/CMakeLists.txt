@@ -26,7 +26,7 @@ target_include_directories(ee24_dma PUBLIC
 target_compile_definitions(ee24_dma PUBLIC
     EE24_CONFIG_H
     EE24_TRANSFER=EE24_TRANSFER_DMA
-    EE24_POLL_CHUNK=256U
+    EE24_POLL_CHUNK=32U
     EE24_TIMEOUT_MUTEX_MS=HAL_MAX_DELAY
     EE24_TIMEOUT_TRANSFER_MS=35U
     EE24_TIMEOUT_PAGE_MS=15U)
@@ -36,7 +36,7 @@ add_executable(test_ee24_dma test_ee24.c)
 target_link_libraries(test_ee24_dma PRIVATE ee24_dma unity)
 
 # Polling, reading 32 KB in one call, the most EE24_POLL_CHUNK allows. With the
-# shipped 256 bytes every piece gets one share of the transfer time, so this is
+# shipped 32 bytes every piece gets one share of the transfer time, so this is
 # the build where a piece gets time for its size by polling.
 add_library(ee24_big_chunk STATIC ${PROJECT_SOURCE_DIR}/src/ee24.c)
 target_include_directories(ee24_big_chunk PUBLIC

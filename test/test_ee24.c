@@ -947,18 +947,40 @@ void test_a_write_is_split_at_every_page(void)
 /*****************************************************************************************************/
 /**
  * @brief A read on a 24C16 stops at the end of each 256 byte block.
+ *
+ * With pieces of 256 or more that is 56, 256, 256 and 32 bytes. Smaller
+ * pieces split it further, but none crosses a block either.
  */
 void test_a_read_is_split_at_every_block(void)
 {
+    uint32_t at     = 200U;
+    uint32_t left   = 600U;
+    int      pieces = 0;
+
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(16U, false));
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, read_all(200U, readback, 600U));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, chip.faults, chip.fault);
 
-    TEST_ASSERT_EQUAL_INT(4, chip.reads);
-    TEST_ASSERT_EQUAL_UINT16(56U, chip.read_sizes[0]);
-    TEST_ASSERT_EQUAL_UINT16(256U, chip.read_sizes[1]);
-    TEST_ASSERT_EQUAL_UINT16(256U, chip.read_sizes[2]);
-    TEST_ASSERT_EQUAL_UINT16(32U, chip.read_sizes[3]);
+    /* Each piece runs to the end of its block, or to the end of the read, and
+       is no bigger than this build reads at once. */
+    while (left > 0U)
+    {
+        uint32_t piece = 256U - (at % 256U);
+
+        piece = (piece > left) ? left : piece;
+        piece = (piece > READ_PIECE) ? READ_PIECE : piece;
+
+        TEST_ASSERT_EQUAL_UINT16(piece, chip.read_sizes[pieces]);
+
+        at   += piece;
+        left -= piece;
+        pieces++;
+    }
+
+    TEST_ASSERT_EQUAL_INT(pieces, chip.reads);
+    TEST_ASSERT_EQUAL_INT_MESSAGE((READ_PIECE >= 256U) ? 4 : pieces, chip.reads,
+                                  "a block was split into more pieces than it needed");
 }
 
 /*****************************************************************************************************/

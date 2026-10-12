@@ -154,12 +154,19 @@ Either way a read or a write is a job, and your code goes on while it runs. The 
 ### How much a read moves in one call, by polling
 
 ```c
-#define EE24_POLL_CHUNK                 256U
+#define EE24_POLL_CHUNK                 32U
 ```
 
-By polling the CPU moves every byte, so a long read would keep your code waiting for all of it: 32 KB is about 750 ms at 400 kHz, and 3 s at 100 kHz. So `ee24_read()` reads the first piece of at most `EE24_POLL_CHUNK` bytes, and each `ee24_is_busy()` the next. With 256 bytes no call takes longer than 6 ms at 400 kHz, or 23 ms at 100 kHz.
+By polling the CPU moves every byte, so a long read would keep your code waiting for all of it: 32 KB is about 750 ms at 400 kHz, and 3 s at 100 kHz. So `ee24_read()` reads the first piece of at most `EE24_POLL_CHUNK` bytes, and each `ee24_is_busy()` the next.
 
-Bigger pieces are a little faster in all, since each piece sends the address again, 3 or 4 bytes. Smaller ones keep each call shorter. Any value from 1 to 32768 works. A read no longer than one piece is done when `ee24_read()` returns. With DMA the setting is not used.
+The datasheets put no limit on a read: a chip sends byte after byte for as long as it is asked, to the end of its memory. The 32 shipped is the biggest page, so a read piece takes as long as writing a page does, and no ee24 call keeps your code longer than that:
+
+| `EE24_POLL_CHUNK` | One call at 400 kHz | At 100 kHz | 1 KB in all, with `ee24_wait()` |
+|---|---|---|---|
+| 32, shipped | 0.8 ms | 3.3 ms | 26 ms |
+| 256 | 5.9 ms | 23 ms | 23 ms |
+
+Bigger pieces are faster in all, since each piece sends the address again, 3 or 4 bytes, but keep each call longer. Any value from 1 to 32768 works. A read no longer than one piece is done when `ee24_read()` returns. With DMA the setting is not used.
 
 ### Timeouts
 
@@ -171,7 +178,7 @@ Each step has its own time, in milliseconds, after which it ends with `EE24_ERR_
 | `EE24_TIMEOUT_TRANSFER_MS` | Moving data on the bus, for every 256 bytes a transfer carries | 35 |
 | `EE24_TIMEOUT_PAGE_MS` | The chip storing one page, 5 ms at most on most chips, 10 ms on some older ones | 15 |
 
-The transfer time grows with the size, because a transfer's time does. 256 bytes take 23 ms at 100 kHz, the slowest clock the chips are made for, and 6 ms at 400 kHz, so 35 ms covers 100 kHz with half again to spare. A page, 32 bytes at most, gets 35 ms, and so does a read piece of 256 bytes. A bigger piece gets more: 300 bytes get 70 ms, two shares, and with DMA, which reads 32 KB at a time, each half of a 24C512 gets 128 shares, 4.5 s, and takes about 3 s at 100 kHz. A clock slower than 100 kHz needs a bigger value.
+The transfer time grows with the size, because a transfer's time does. 256 bytes take 23 ms at 100 kHz, the slowest clock the chips are made for, and 6 ms at 400 kHz, so 35 ms covers 100 kHz with half again to spare. A page, 32 bytes at most, gets 35 ms, and so does a read piece of up to 256 bytes. A bigger piece gets more: 300 bytes get 70 ms, two shares, and with DMA, which reads 32 KB at a time, each half of a 24C512 gets 128 shares, 4.5 s, and takes about 3 s at 100 kHz. A clock slower than 100 kHz needs a bigger value.
 
 The page time is for each page, not the whole write. Writing 1 KB to a 24C256 is 32 pages, and each gets its own 15 ms. Waiting for the mutex for ever is safe: whoever has the chip gives it back within the other times.
 
