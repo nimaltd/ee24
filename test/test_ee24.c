@@ -810,7 +810,7 @@ void test_a_handle_full_of_rubbish_works_after_init(void)
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&local, 10U, readback, 8U));
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_wait(&local));
     TEST_ASSERT_EQUAL_MEMORY(pattern, readback, 8U);
-    TEST_ASSERT_FALSE(ee24_is_busy(&local));
+    TEST_ASSERT_FALSE(ee24_is_running(&local));
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, chip.faults, chip.fault);
 }
 
@@ -867,9 +867,9 @@ void test_zero_bytes_does_nothing(void)
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 0U));
-    TEST_ASSERT_FALSE_MESSAGE(ee24_is_busy(&ee), "nothing to do started a job");
+    TEST_ASSERT_FALSE_MESSAGE(ee24_is_running(&ee), "nothing to do started a job");
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0U, readback, 0U));
-    TEST_ASSERT_FALSE(ee24_is_busy(&ee));
+    TEST_ASSERT_FALSE(ee24_is_running(&ee));
 
     /* Nothing, just past the last byte, still fits. */
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, chip.size, readback, 0U));
@@ -1137,7 +1137,7 @@ void test_a_chip_that_never_finishes_times_out(void)
     start = HAL_GetTick();
     TEST_ASSERT_EQUAL_INT(EE24_ERR_TIMEOUT, write_all(0U, pattern, 1U));
     TEST_ASSERT_UINT32_WITHIN(2U, EE24_TIMEOUT_PAGE_MS + 1U, HAL_GetTick() - start);
-    TEST_ASSERT_FALSE(ee24_is_busy(&ee));
+    TEST_ASSERT_FALSE(ee24_is_running(&ee));
 
     /* Followed by hand: the one call that sees the time run out says the job
        is over, and ee24_wait() then says how. The chip answers again first,
@@ -1147,9 +1147,9 @@ void test_a_chip_that_never_finishes_times_out(void)
 
     /* Past the page's transfer, so with DMA too the chip is now storing it. */
     now_us += 2000U;
-    TEST_ASSERT_TRUE(ee24_is_busy(&ee));
+    TEST_ASSERT_TRUE(ee24_is_running(&ee));
     now_us += (EE24_TIMEOUT_PAGE_MS + 3U) * 1000U;
-    TEST_ASSERT_FALSE_MESSAGE(ee24_is_busy(&ee), "said busy on the call that ended the job");
+    TEST_ASSERT_FALSE_MESSAGE(ee24_is_running(&ee), "said running on the call that ended the job");
     TEST_ASSERT_EQUAL_INT(EE24_ERR_TIMEOUT, ee24_wait(&ee));
 }
 
@@ -1199,7 +1199,7 @@ void test_a_bus_too_slow_times_out(void)
     TEST_ASSERT_EQUAL_INT(EE24_ERR_TIMEOUT, read_all(0U, readback, 256U));
     TEST_ASSERT_EQUAL_INT_MESSAGE(USES_DMA ? 1 : 0, chip.i2c_resets,
                                   "a stuck DMA transfer was not stopped, or a polling one was");
-    TEST_ASSERT_FALSE(ee24_is_busy(&ee));
+    TEST_ASSERT_FALSE(ee24_is_running(&ee));
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, mutex_held, "kept the mutex after a timeout");
 
     /* Back at 400 kHz it works again. */
@@ -1411,7 +1411,7 @@ void test_a_mutex_held_elsewhere_times_out(void)
     lock_result = OSAL_ERR_TIMEOUT;
     TEST_ASSERT_EQUAL_INT(EE24_ERR_TIMEOUT, ee24_write(&ee, 0U, pattern, 4U));
     TEST_ASSERT_EQUAL_INT(EE24_ERR_TIMEOUT, ee24_read(&ee, 0U, readback, 4U));
-    TEST_ASSERT_FALSE_MESSAGE(ee24_is_busy(&ee), "a call that never had the chip left a job");
+    TEST_ASSERT_FALSE_MESSAGE(ee24_is_running(&ee), "a call that never had the chip left a job");
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, chip.transfers, "used the bus without the mutex");
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, mutex_gives, "gave back a mutex it never had");
@@ -1471,13 +1471,13 @@ void test_the_wait_sleeps_through_osal(void)
 
 /*****************************************************************************************************/
 /**
- * @brief With nothing running, ee24_is_busy() says no, and ee24_wait() returns at once.
+ * @brief With nothing running, ee24_is_running() says no, and ee24_wait() returns at once.
  */
-void test_nothing_running_is_not_busy(void)
+void test_nothing_started_is_not_running(void)
 {
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, init_chip(256U, false));
 
-    TEST_ASSERT_FALSE(ee24_is_busy(&ee));
+    TEST_ASSERT_FALSE(ee24_is_running(&ee));
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_wait(&ee));
     TEST_ASSERT_EQUAL_INT(0, sleeps);
     TEST_ASSERT_EQUAL_INT(0, chip.transfers);
@@ -1485,7 +1485,7 @@ void test_nothing_running_is_not_busy(void)
 
 /*****************************************************************************************************/
 /**
- * @brief A write returns once its first page has started, and ee24_is_busy() sends the others.
+ * @brief A write returns once its first page has started, and ee24_is_running() sends the others.
  */
 void test_a_write_returns_after_its_first_page(void)
 {
@@ -1497,7 +1497,7 @@ void test_a_write_returns_after_its_first_page(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, mutex_held, "gave the mutex back while writing");
 
     /* The caller's state machine does other work between its questions. */
-    while (ee24_is_busy(&ee))
+    while (ee24_is_running(&ee))
     {
         now_us += 100U;
     }
@@ -1506,7 +1506,7 @@ void test_a_write_returns_after_its_first_page(void)
     TEST_ASSERT_EQUAL_MEMORY(pattern, chip.mem, 96U);
     TEST_ASSERT_EQUAL_INT(0, mutex_held);
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_wait(&ee));
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sleeps, "ee24_is_busy() or ee24_wait() slept");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sleeps, "ee24_is_running() or ee24_wait() slept");
 }
 
 /*****************************************************************************************************/
@@ -1611,7 +1611,7 @@ void test_a_polling_read_goes_a_piece_at_a_time(void)
                                   "the mutex does not follow the read");
 
     /* The caller's state machine does other work between its questions. */
-    while (ee24_is_busy(&ee))
+    while (ee24_is_running(&ee))
     {
         now_us += 100U;
     }
@@ -1636,12 +1636,12 @@ void test_a_polling_read_goes_a_piece_at_a_time(void)
     /* A read that fits in one piece is done when the call returns. */
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_read(&ee, 0U, readback, 16U));
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, mutex_held, "kept the mutex after a read in one piece");
-    TEST_ASSERT_FALSE(ee24_is_busy(&ee));
+    TEST_ASSERT_FALSE(ee24_is_running(&ee));
 }
 
 /*****************************************************************************************************/
 /**
- * @brief A DMA read returns once it has started, and ee24_is_busy() says when it is done.
+ * @brief A DMA read returns once it has started, and ee24_is_running() says when it is done.
  */
 void test_a_dma_read_returns_at_once(void)
 {
@@ -1653,11 +1653,11 @@ void test_a_dma_read_returns_at_once(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, mutex_held, "gave the mutex back while the read was running");
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(16U * EE24_TIMEOUT_TRANSFER_MS, ee.job_timeout,
                                      "4 KB did not get 16 shares of the transfer time");
-    TEST_ASSERT_TRUE(ee24_is_busy(&ee));
+    TEST_ASSERT_TRUE(ee24_is_running(&ee));
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_wait(&ee));
     TEST_ASSERT_EQUAL_MEMORY(pattern, readback, 4096U);
-    TEST_ASSERT_FALSE(ee24_is_busy(&ee));
+    TEST_ASSERT_FALSE(ee24_is_running(&ee));
     TEST_ASSERT_EQUAL_INT(0, mutex_held);
 }
 
@@ -1671,13 +1671,13 @@ void test_a_dma_write_goes_a_page_at_a_time(void)
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 96U));
     TEST_ASSERT_EQUAL_INT(1, chip.dma_transfers);
-    TEST_ASSERT_TRUE(ee24_is_busy(&ee));
+    TEST_ASSERT_TRUE(ee24_is_running(&ee));
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, chip.polls, "asked the chip while the page was on its way");
 
     /* The first page is out, and the chip is storing it. */
     now_us += 2000U;
-    TEST_ASSERT_TRUE(ee24_is_busy(&ee));
-    TEST_ASSERT_TRUE(ee24_is_busy(&ee));
+    TEST_ASSERT_TRUE(ee24_is_running(&ee));
+    TEST_ASSERT_TRUE(ee24_is_running(&ee));
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, chip.dma_transfers, "sent a page before the last was stored");
 
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_wait(&ee));
@@ -1785,7 +1785,7 @@ void test_for_ever_never_runs_out(void)
     chip.byte_us = 0U;
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_write(&ee, 0U, pattern, 1U));
     tick_jump_ms = 0xFFFFFFFFU;
-    TEST_ASSERT_TRUE_MESSAGE(ee24_is_busy(&ee), "for ever ran out after 49 days");
+    TEST_ASSERT_TRUE_MESSAGE(ee24_is_running(&ee), "for ever ran out after 49 days");
     tick_jump_ms = 0U;
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, ee24_wait(&ee));
 }
@@ -1848,7 +1848,7 @@ int main(void)
     RUN_TEST(test_the_mutex_wait_is_the_configured_one);
     RUN_TEST(test_the_wait_sleeps_through_osal);
 
-    RUN_TEST(test_nothing_running_is_not_busy);
+    RUN_TEST(test_nothing_started_is_not_running);
     RUN_TEST(test_a_write_returns_after_its_first_page);
     RUN_TEST(test_a_call_while_a_job_runs_is_refused);
     RUN_TEST(test_wait_reports_a_refused_call);
@@ -1925,7 +1925,7 @@ static void chip_reset(uint16_t size_kbit)
  *
  * @param[in] which  0 to 7: init with no handle, init with no bus, read with
  *                   no handle, read with no buffer, the same for write, then
- *                   ee24_is_busy() and ee24_wait() with no handle.
+ *                   ee24_is_running() and ee24_wait() with no handle.
  * @return true when the call stopped at an assert instead of returning.
  */
 static bool assert_stops(int which)
@@ -1963,7 +1963,7 @@ static bool assert_stops(int which)
                 break;
 
             case 6:
-                (void)ee24_is_busy(NULL);
+                (void)ee24_is_running(NULL);
                 break;
 
             default:
