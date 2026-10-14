@@ -31,7 +31,7 @@
 /* USER CODE BEGIN EE24_CONFIGURATION */
 
 /* How ee24_read() and ee24_write() move their data. Either way each is a job:
-   it returns once started, and ee24_is_running() or ee24_wait() says when it has
+   it returns once started, and ee24_process() or ee24_wait() says when it has
    finished. One of:
      EE24_TRANSFER_POLLING  the CPU moves it, a piece per call
      EE24_TRANSFER_DMA      the DMA moves it, and the CPU is free meanwhile
@@ -40,7 +40,7 @@
 #define EE24_TRANSFER                   EE24_TRANSFER_POLLING
 
 /* By polling, the most one call reads, in bytes, from 1 to 32768. A read is a
-   job: ee24_read() reads the first piece and each ee24_is_running() the next, so
+   job: ee24_read() reads the first piece and each ee24_process() the next, so
    no call keeps your code longer than one piece takes. 32 bytes, the biggest
    page, take 0.8 ms at 400 kHz and 3.3 ms at 100 kHz, as long as writing a
    page does. Bigger is faster in all, since each piece sends its address

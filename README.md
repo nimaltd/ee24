@@ -18,7 +18,7 @@ Read or write any number of bytes at any address, and the library deals with the
   share one project
 - A read or a write returns at once and goes on by itself, a piece at a time,
   while your code does something else, by polling as well as by DMA.
-  `ee24_is_running()` says whether it still runs, and `ee24_wait()` waits for it
+  `ee24_process()` says whether it still runs, and `ee24_wait()` waits for it
 - Polling or DMA, one setting
 - Writes wait only as long as the chip needs, by asking it, instead of a fixed
   10 ms a page
@@ -157,7 +157,7 @@ Either way a read or a write is a job, and your code goes on while it runs. The 
 #define EE24_POLL_CHUNK                 32U
 ```
 
-By polling the CPU moves every byte, so a long read would keep your code waiting for all of it: 32 KB is about 750 ms at 400 kHz, and 3 s at 100 kHz. So `ee24_read()` reads the first piece of at most `EE24_POLL_CHUNK` bytes, and each `ee24_is_running()` the next.
+By polling the CPU moves every byte, so a long read would keep your code waiting for all of it: 32 KB is about 750 ms at 400 kHz, and 3 s at 100 kHz. So `ee24_read()` reads the first piece of at most `EE24_POLL_CHUNK` bytes, and each `ee24_process()` the next.
 
 The datasheets put no limit on a read: a chip sends byte after byte for as long as it is asked, to the end of its memory. The 32 shipped is the biggest page, so a read piece takes as long as writing a page does, and no ee24 call keeps your code longer than that:
 
@@ -232,7 +232,7 @@ int main(void)
 
 `256` says the chip is a 24C256. The last two arguments are the write protect pin, `NULL` and `0` when it is not wired to the MCU.
 
-A read or a write only starts the job and returns at once, so `ee24_wait()` waits for it, as [below](#jobs-ee24_is_running-and-ee24_wait). The same code works by polling and with DMA. `ee24_wait()` returns how the job ended: `EE24_ERR_NONE` when it worked, which is 0. So check for it by name: `if (ee24_wait(...))` would mean "if it failed".
+A read or a write only starts the job and returns at once, so `ee24_wait()` waits for it, as [below](#jobs-ee24_process-and-ee24_wait). The same code works by polling and with DMA. `ee24_wait()` returns how the job ended: `EE24_ERR_NONE` when it worked, which is 0. So check for it by name: `if (ee24_wait(...))` would mean "if it failed".
 
 ### Keeping settings in it
 
@@ -269,12 +269,12 @@ void settings_save(void)
 
 An EEPROM cell survives around a million writes. That is a lot for a setting a person changes, and not much for something written every second, so save when a value changes, not on a timer.
 
-### Jobs: ee24_is_running() and ee24_wait()
+### Jobs: ee24_process() and ee24_wait()
 
 A read or a write is a job: the call does the first piece and returns at once. A write sends a page, and the chip stores it by itself; each page takes the chip up to 5 ms, so 1 KB on a 24C256, 32 pages, takes around 100 ms, and the CPU is yours meanwhile. A read by polling moves one piece of `EE24_POLL_CHUNK` bytes per call; with DMA it moves by itself. Two calls follow a job:
 
-- `ee24_is_running()` moves the job one step and returns: `true` while it runs. For a write it asks the chip whether it has stored the page, and once it has, sends the next one. For a read by polling it reads the next piece. Call it from a state machine or the main loop.
-- `ee24_wait()` waits until the job has ended and returns how it ended. While the chip or the DMA has the job it sleeps a millisecond at a time through osal, so that with an RTOS other threads run; the pieces of a read by polling it reads one after the other. Called once `ee24_is_running()` has said `false`, it returns at once.
+- `ee24_process()` moves the job one step and returns: `true` while it runs. For a write it asks the chip whether it has stored the page, and once it has, sends the next one. For a read by polling it reads the next piece. Call it from a state machine or the main loop.
+- `ee24_wait()` calls `ee24_process()` until the job has ended, and returns how it ended. With an RTOS it sleeps a millisecond at a time through osal while the chip or the DMA has the job, so other threads run. Without one nothing else could run meanwhile, so it takes the next step at once and the job ends as soon as it can. The pieces of a read by polling it reads one after the other either way. Called once `ee24_process()` has said `false`, it returns at once.
 
 ```c
 /* In a state machine: start the write, and come back to it. */
@@ -284,14 +284,14 @@ case STATE_SAVE:
     break;
 
 case STATE_SAVING:
-    if (!ee24_is_running(&eeprom))
+    if (!ee24_process(&eeprom))
     {
         state = (ee24_wait(&eeprom) == EE24_ERR_NONE) ? STATE_IDLE : STATE_FAILED;
     }
     break;
 ```
 
-A page goes out, and a piece is read, only when `ee24_is_running()` or `ee24_wait()` asks, so a state machine that comes back every 10 ms writes one page, or reads one piece, every 10 ms. Come back every millisecond, or less, and a job runs as fast as the chip and the bus allow.
+A page goes out, and a piece is read, only when `ee24_process()` or `ee24_wait()` asks, so a state machine that comes back every 10 ms writes one page, or reads one piece, every 10 ms. Come back every millisecond, or less, and a job runs as fast as the chip and the bus allow.
 
 `ee24_wait()` also reports a call that was refused at once, past the end of the chip for one, so simple code needs only it. Until a job has ended, its buffer must stay where it is and unchanged, and any other ee24 call on that chip returns `EE24_ERR_BUSY`. Each step of a job keeps to its own time from `ee24_config.h`, and a step that takes longer ends the job with `EE24_ERR_TIMEOUT`.
 
@@ -359,13 +359,13 @@ void StartDefaultTask(void *argument)
 }
 ```
 
-A job holds the mutex from the call that starts it until `ee24_is_running()` or `ee24_wait()` sees it end, so call those from the thread that started it. A call from another thread while a job runs gets `EE24_ERR_BUSY` at once, rather than waiting, so that thread can try again later. `ee24_wait()` sleeps between its questions; a loop of your own around `ee24_is_running()` should too, `osDelay(1)` for one, rather than spin.
+A job holds the mutex from the call that starts it until `ee24_process()` or `ee24_wait()` sees it end, so call those from the thread that started it. A call from another thread while a job runs gets `EE24_ERR_BUSY` at once, rather than waiting, so that thread can try again later. `ee24_wait()` sleeps between its questions; a loop of your own around `ee24_process()` should too, `osDelay(1)` for one, rather than spin.
 
 The mutex is per chip, not per bus. Two chips on one bus used from two threads at once would collide on the bus. Usually the HAL refuses the second transfer, which comes back as `EE24_ERR_I2C`, but that is luck rather than safety. Use both chips from one thread, or guard the bus with a mutex of your own.
 
 ### What is safe to call from an interrupt
 
-Nothing. By polling each call waits on the bus for its piece, `ee24_is_running()` asks the chip over it, and with an RTOS every call takes a mutex. Hand the work to a task or to the main loop instead, for example with [seq](https://github.com/nimaltd/seq).
+Nothing. By polling each call waits on the bus for its piece, `ee24_process()` asks the chip over it, and with an RTOS every call takes a mutex. Hand the work to a task or to the main loop instead, for example with [seq](https://github.com/nimaltd/seq).
 
 ---
 
@@ -376,7 +376,7 @@ Nothing. By polling each call waits on the bus for its piece, `ee24_is_running()
 | `ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_address, uint16_t size_kbit, GPIO_TypeDef *wp_port, uint16_t wp_pin)` | Set up a handle for one chip and check that it answers. Call it once per handle |
 | `ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len)` | Start reading `len` bytes from `address`, as a job |
 | `ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len)` | Start writing `len` bytes to `address`, as a job |
-| `bool ee24_is_running(ee24_t *handle)` | Whether a job still runs. Checks once, moves it on, and returns at once |
+| `bool ee24_process(ee24_t *handle)` | Whether a job still runs. Checks once, moves it on, and returns at once |
 | `ee24_err_t ee24_wait(ee24_t *handle)` | Wait until the job has ended, and return how it ended |
 
 | Error | Means |
@@ -405,7 +405,7 @@ One command does everything:
 python test/run_tests.py
 ```
 
-It configures, builds and runs the suite, then tells you plainly whether it passed. The suite is built four times: with `ee24_config.h` as it ships, by polling, then reading 32 KB a call by polling, then with DMA, then with every time `HAL_MAX_DELAY`. osal is replaced by a fake the tests control, so a mutex held by another thread, or refused by the RTOS, is tested with no RTOS at all. The RTOS side itself is osal's, and osal's own tests cover it. Add `--clean` to start from an empty build folder.
+It configures, builds and runs the suite, then tells you plainly whether it passed. The suite is built six times: with `ee24_config.h` as it ships, by polling, then reading 32 KB a call by polling, then with DMA, then with every time `HAL_MAX_DELAY`, then with no RTOS, by polling and by DMA, where `ee24_wait()` must never sleep. osal is replaced by a fake the tests control, so a mutex held by another thread, or refused by the RTOS, is tested with no RTOS at all. The RTOS side itself is osal's, and osal's own tests cover it. Add `--clean` to start from an empty build folder.
 
 If you prefer doing it by hand:
 
@@ -469,7 +469,7 @@ __HAL_RCC_I2C1_CLK_ENABLE();
 
 Use `I2C2` in both names for the second bus.
 
-**`EE24_ERR_BUSY` from a read or a write.** A job is still running on that chip. Call `ee24_wait()`, or wait for `ee24_is_running()` to say `false`, before the next call.
+**`EE24_ERR_BUSY` from a read or a write.** A job is still running on that chip. Call `ee24_wait()`, or wait for `ee24_process()` to say `false`, before the next call.
 
 **With DMA, every read or write ends in `EE24_ERR_TIMEOUT`.** The DMA transfer never finishes. Check that the I2C has a DMA stream for RX and for TX, and that the I2C event and error interrupts are enabled in CubeMX's NVIC settings.
 

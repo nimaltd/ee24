@@ -29,7 +29,7 @@
  * ****************************************************************************************************
 */
 
-/* How often ee24_wait() asks whether the job has moved on. */
+/* With an RTOS, how often ee24_wait() asks whether the job has moved on. */
 #define EE24_POLL_MS            1U
 
 /* How hard ee24_init() tries to find the chip. */
@@ -204,8 +204,8 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
  * @brief Start reading len bytes starting at address. Not from an interrupt.
  *
  * A job: by polling it reads the first piece, up to EE24_POLL_CHUNK bytes, and
- * ee24_is_running() reads each of the others, so no call keeps the caller long.
- * With DMA it returns once the first piece has started. ee24_is_running() or
+ * ee24_process() reads each of the others, so no call keeps the caller long.
+ * With DMA it returns once the first piece has started. ee24_process() or
  * ee24_wait() says when the last is in. Until then the buffer must stay where
  * it is.
  *
@@ -233,7 +233,7 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
             break;
         }
 
-        /* One job at a time. ee24_is_running() says when the last has ended. */
+        /* One job at a time. ee24_process() says when the last has ended. */
         if (handle->job_state != EE24_JOB_IDLE)
         {
             err = EE24_ERR_BUSY;
@@ -277,7 +277,7 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
         handle->job_address = address;
 
 #if (EE24_TRANSFER == EE24_TRANSFER_DMA)
-        /* The DMA brings each piece in, and ee24_is_running() starts the next. */
+        /* The DMA brings each piece in, and ee24_process() starts the next. */
         err = ee24_piece_start(handle);
         err = (err == EE24_ERR_NONE) ? EE24_ERR_BUSY : err;
 #else
@@ -309,8 +309,8 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
 /**
  * @brief Start writing len bytes starting at address. Not from an interrupt.
  *
- * A job: it returns once the first page has started, and ee24_is_running() sends
- * each of the others once the chip has stored the one before. ee24_is_running()
+ * A job: it returns once the first page has started, and ee24_process() sends
+ * each of the others once the chip has stored the one before. ee24_process()
  * or ee24_wait() says when the last is stored. Until then the buffer must stay
  * as it is.
  *
@@ -339,7 +339,7 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
             break;
         }
 
-        /* One job at a time. ee24_is_running() says when the last has ended. */
+        /* One job at a time. ee24_process() says when the last has ended. */
         if (handle->job_state != EE24_JOB_IDLE)
         {
             err = EE24_ERR_BUSY;
@@ -402,7 +402,7 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
 
 /*****************************************************************************************************/
 /**
- * @brief Whether a job is still running. Moves it on, and returns at once. Not from an interrupt.
+ * @brief Move the running job one step, and say whether it still runs. Not from an interrupt.
  *
  * A job is a read or a write. Each call moves it one step: it reads the next
  * piece by polling, or asks the chip, or the HAL with DMA, whether the piece
@@ -413,7 +413,7 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
  * @param[in,out] handle  Handle from ee24_init().
  * @return true while the job runs, false once it has ended or when none runs.
  */
-bool ee24_is_running(ee24_t *handle)
+bool ee24_process(ee24_t *handle)
 {
     ee24_err_t err = EE24_ERR_NONE;
 
@@ -456,11 +456,11 @@ bool ee24_is_running(ee24_t *handle)
 /**
  * @brief Wait until the running job has ended, and say how it ended. Not from an interrupt.
  *
- * Asks first, so after ee24_is_running() has returned false, or after a call that
- * finished or was refused at once, it returns straight away. While the chip or
- * the DMA has the job it sleeps a millisecond through osal between questions,
- * so with an RTOS other threads run. Call it from the thread that started the
- * job.
+ * Asks first, so after ee24_process() has returned false, or after a call that
+ * finished or was refused at once, it returns straight away. With an RTOS it
+ * sleeps a millisecond through osal between steps while the chip or the DMA
+ * has the job, so other threads run. Without one it takes the next step at
+ * once. Call it from the thread that started the job.
  *
  * @param[in,out] handle  Handle from ee24_init().
  * @return How the last read or write ended: EE24_ERR_NONE when it worked.
@@ -469,15 +469,21 @@ ee24_err_t ee24_wait(ee24_t *handle)
 {
     assert_param(handle != NULL);
 
-    while (ee24_is_running(handle))
+    while (ee24_process(handle))
     {
 #if (EE24_TRANSFER == EE24_TRANSFER_POLLING)
-        /* A read by polling moves a piece with every question and waits for
+        /* A read by polling moves a piece with every step and waits for
            nothing, so a sleep between would only slow it down. */
         if (handle->job_state != EE24_JOB_READ)
 #endif
         {
+            /* With an RTOS, a millisecond for the other threads while the chip
+               or the DMA has the job. Without one nothing else could run
+               meanwhile, so the next step comes at once and the job ends as
+               soon as it can. */
+#if (OSAL_RTOS != OSAL_RTOS_NONE)
             osal_delay_ms(EE24_POLL_MS);
+#endif
         }
     }
 
@@ -635,7 +641,7 @@ static ee24_err_t ee24_page_start(ee24_t *handle)
     handle->job_step = ee24_chunk(at, handle->job_len - handle->job_done, handle->page_size);
 
 #if (EE24_TRANSFER == EE24_TRANSFER_DMA)
-    /* The DMA sends the page, and ee24_is_running() sees it go, within the time
+    /* The DMA sends the page, and ee24_process() sees it go, within the time
        its size gets. */
     handle->job_state   = EE24_JOB_SEND;
     handle->job_start   = HAL_GetTick();

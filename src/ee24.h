@@ -127,7 +127,7 @@ typedef enum
     EE24_ERR_I2C     = 3, /**< The chip did not answer, or the I2C transfer failed.  */
     EE24_ERR_TIMEOUT = 4, /**< Not finished in the time ee24_config.h allows.        */
     EE24_ERR_MUTEX   = 5, /**< The RTOS could not create or take the mutex.          */
-    EE24_ERR_BUSY    = 6, /**< A job is still running: see ee24_is_running().       */
+    EE24_ERR_BUSY    = 6, /**< A job is still running: see ee24_process().           */
 
 } ee24_err_t;
 
@@ -186,9 +186,9 @@ ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, siz
 
 /*****************************************************************************************************/
 /**
- * @brief Whether a job is still running. Moves it on, and returns at once.
+ * @brief Move the running job one step, and say whether it still runs. Returns at once.
  */
-bool ee24_is_running(ee24_t *handle);
+bool ee24_process(ee24_t *handle);
 
 /*****************************************************************************************************/
 /**
