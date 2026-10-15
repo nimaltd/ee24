@@ -77,9 +77,10 @@ target_compile_features(ee24_forever PUBLIC c_std_11)
 add_executable(test_ee24_forever test_ee24.c)
 target_link_libraries(test_ee24_forever PRIVATE ee24_forever unity)
 
-# No RTOS, by polling with ee24_config.h as it ships, and by DMA. ee24_wait()
-# then takes the next step at once instead of sleeping, and the fake HAL moves
-# the clock on a microsecond for each question, as a real CPU spends it.
+# No RTOS, by polling with ee24_config.h as it ships, and by DMA. ee24_wait(),
+# and the calls that wait through it, then take the next step at once instead
+# of sleeping, and the fake HAL moves the clock on a microsecond for each
+# question, as a real CPU spends it.
 add_library(ee24_bare STATIC ${PROJECT_SOURCE_DIR}/src/ee24.c)
 target_include_directories(ee24_bare PUBLIC
     ${PROJECT_SOURCE_DIR}/src

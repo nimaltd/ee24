@@ -174,15 +174,27 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
 
 /*****************************************************************************************************/
 /**
- * @brief Start reading len bytes at address, as a job.
+ * @brief Read len bytes at address, and return once they are in.
  */
 ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len);
 
 /*****************************************************************************************************/
 /**
- * @brief Start writing len bytes at address, as a job.
+ * @brief Write len bytes at address, and return once the chip has stored them.
  */
 ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len);
+
+/*****************************************************************************************************/
+/**
+ * @brief Start reading len bytes at address, as a job. Returns at once.
+ */
+ee24_err_t ee24_read_nb(ee24_t *handle, uint32_t address, uint8_t *data, size_t len);
+
+/*****************************************************************************************************/
+/**
+ * @brief Start writing len bytes at address, as a job. Returns at once.
+ */
+ee24_err_t ee24_write_nb(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len);
 
 /*****************************************************************************************************/
 /**

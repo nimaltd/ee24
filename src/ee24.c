@@ -93,6 +93,7 @@ static ee24_err_t    ee24_job_read(ee24_t *handle);
 #endif
 static ee24_err_t    ee24_job_stored(ee24_t *handle);
 static void          ee24_job_end(ee24_t *handle, ee24_err_t err);
+static ee24_err_t    ee24_wait_started(ee24_t *handle, ee24_err_t err);
 static ee24_err_t    ee24_range(const ee24_t *handle, uint32_t address, size_t len);
 static uint32_t      ee24_chunk(uint32_t address, size_t left, uint32_t boundary);
 static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address);
@@ -190,7 +191,7 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
             break;
         }
 
-        /* Only now may ee24_read() and ee24_write() use it. */
+        /* Only now may a read or a write use it. */
         handle->size = size;
         err          = EE24_ERR_NONE;
     }
@@ -201,13 +202,53 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
 
 /*****************************************************************************************************/
 /**
- * @brief Start reading len bytes starting at address. Not from an interrupt.
+ * @brief Read len bytes starting at address, and return once they are in. Not from an interrupt.
+ *
+ * ee24_read_nb() and ee24_wait() in one call, for code with nothing else to
+ * do meanwhile. With an RTOS other threads run while the DMA has the job.
+ * Without one it never sleeps, and returns as soon as the last byte is in.
+ *
+ * @param[in,out] handle   Handle from ee24_init().
+ * @param[in]     address  First byte to read.
+ * @param[out]    data     Where the bytes go. With DMA, in memory the DMA can reach.
+ * @param[in]     len      Bytes to read, up to the end of the chip.
+ * @return EE24_ERR_NONE once every byte is in, or the EE24_ERR_ value that says what went wrong.
+ */
+ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len)
+{
+    return ee24_wait_started(handle, ee24_read_nb(handle, address, data, len));
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Write len bytes starting at address, and return once stored. Not from an interrupt.
+ *
+ * ee24_write_nb() and ee24_wait() in one call, for code with nothing else to
+ * do meanwhile. With an RTOS other threads run while the chip stores each
+ * page. Without one it never sleeps, and sends each page as soon as the chip
+ * has stored the one before.
+ *
+ * @param[in,out] handle   Handle from ee24_init().
+ * @param[in]     address  First byte to write.
+ * @param[in]     data     The bytes to write. With DMA, in memory the DMA can reach.
+ * @param[in]     len      Bytes to write, up to the end of the chip.
+ * @return EE24_ERR_NONE once every page is stored, or the EE24_ERR_ value that
+ *         says what went wrong. After an error, the pages before the failing one are written.
+ */
+ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len)
+{
+    return ee24_wait_started(handle, ee24_write_nb(handle, address, data, len));
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Start reading len bytes starting at address, and return at once. Not from an interrupt.
  *
  * A job: by polling it reads the first piece, up to EE24_POLL_CHUNK bytes, and
  * ee24_process() reads each of the others, so no call keeps the caller long.
  * With DMA it returns once the first piece has started. ee24_process() or
  * ee24_wait() says when the last is in. Until then the buffer must stay where
- * it is.
+ * it is. ee24_read() is this and ee24_wait() in one call.
  *
  * @param[in,out] handle   Handle from ee24_init().
  * @param[in]     address  First byte to read.
@@ -215,7 +256,7 @@ ee24_err_t ee24_init(ee24_t *handle, I2C_HandleTypeDef *hi2c, uint8_t dev_addres
  * @param[in]     len      Bytes to read, up to the end of the chip.
  * @return EE24_ERR_NONE once started, or the EE24_ERR_ value that says what went wrong.
  */
-ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len)
+ee24_err_t ee24_read_nb(ee24_t *handle, uint32_t address, uint8_t *data, size_t len)
 {
     ee24_err_t err  = EE24_ERR_INVALID;
     osal_err_t lock = OSAL_ERR_NONE;
@@ -307,12 +348,12 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
 
 /*****************************************************************************************************/
 /**
- * @brief Start writing len bytes starting at address. Not from an interrupt.
+ * @brief Start writing len bytes starting at address, and return at once. Not from an interrupt.
  *
  * A job: it returns once the first page has started, and ee24_process() sends
  * each of the others once the chip has stored the one before. ee24_process()
  * or ee24_wait() says when the last is stored. Until then the buffer must stay
- * as it is.
+ * as it is. ee24_write() is this and ee24_wait() in one call.
  *
  * @param[in,out] handle   Handle from ee24_init().
  * @param[in]     address  First byte to write.
@@ -321,7 +362,7 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
  * @return EE24_ERR_NONE once started, or the EE24_ERR_ value that says what
  *         went wrong. After an error, the pages before the failing one are written.
  */
-ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len)
+ee24_err_t ee24_write_nb(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len)
 {
     ee24_err_t err  = EE24_ERR_INVALID;
     osal_err_t lock = OSAL_ERR_NONE;
@@ -860,6 +901,30 @@ static void ee24_job_end(ee24_t *handle, ee24_err_t err)
     handle->job_state  = EE24_JOB_IDLE;
     handle->job_result = err;
     osal_mutex_unlock(&handle->mutex);
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Wait for the job a call has just started, or pass on why it did not start.
+ *
+ * Only a call that started a job has one to wait for. One refused because a
+ * job was already running started nothing, and waiting would finish that job
+ * and report how it ended, as if it were this one.
+ *
+ * @param[in,out] handle  Handle from ee24_init().
+ * @param[in]     err     What the call that starts the job returned.
+ * @return How the job ended, or err when none started.
+ */
+static ee24_err_t ee24_wait_started(ee24_t *handle, ee24_err_t err)
+{
+    ee24_err_t result = err;
+
+    if (result == EE24_ERR_NONE)
+    {
+        result = ee24_wait(handle);
+    }
+
+    return result;
 }
 
 /*****************************************************************************************************/

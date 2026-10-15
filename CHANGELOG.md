@@ -35,13 +35,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   again, every millisecond with an RTOS and at once without one, and carries
   on as soon as the chip has stored the page, which is how the datasheets say
   to do it. Writes are usually about twice as fast.
-- **A read or a write returns once started**, as a job, and goes on a piece
-  at a time while the caller does something else, by polling as well as by
-  DMA. `ee24_process()` moves it on and says whether it still runs, and
-  `ee24_wait()` waits for it, so code that read or wrote and then went
-  straight on needs an `ee24_wait()` after the call. By polling a read moves
-  at most `EE24_POLL_CHUNK` bytes per call, 32 as shipped, as long as
-  writing a page takes.
+- **A read or a write can go on while the caller does something else.**
+  `ee24_read_nb()` and `ee24_write_nb()` start it as a job and return at
+  once, by polling as well as by DMA. `ee24_process()` moves it on and says
+  whether it still runs, and `ee24_wait()` waits for it. `ee24_read()` and
+  `ee24_write()` still return once done, as in version 3. By polling a read
+  moves at most `EE24_POLL_CHUNK` bytes per `_nb` call, 32 as shipped, as long
+  as writing a page takes.
 - **No timeout argument.** The times are set once in `ee24_config.h`, for each
   step: `EE24_TIMEOUT_MUTEX_MS` for the mutex, `EE24_TIMEOUT_TRANSFER_MS` for
   every 256 bytes a transfer carries, so a long read gets time for its size,
@@ -59,13 +59,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - A real mutex per chip with an RTOS: CMSIS-RTOS v1 and v2 for FreeRTOS, and
   ThreadX, through osal. A thread finding another using the chip waits for
-  it, and `ee24_wait()` sleeps between steps, so other threads run. With no
-  RTOS it does not sleep, since nothing else could run meanwhile.
+  it, and a call that waits sleeps between steps, so other threads run. With
+  no RTOS it does not sleep, since nothing else could run meanwhile.
 - DMA, set with `EE24_TRANSFER` in `ee24_config.h`. A DMA transfer that takes longer than its time ends the job
   with `EE24_ERR_TIMEOUT`, and the I2C is set up again so the next call can
   use it.
-- `ee24_process()` and `ee24_wait()`, to follow a job from a state machine or
-  to wait for it.
+- `ee24_read_nb()`, `ee24_write_nb()`, `ee24_process()` and `ee24_wait()`, to
+  run a read or a write as a job from a state machine, or to wait for it.
 - Error values that say what went wrong: `EE24_ERR_INVALID`, `EE24_ERR_RANGE`,
   `EE24_ERR_I2C`, `EE24_ERR_TIMEOUT`, `EE24_ERR_MUTEX` and `EE24_ERR_BUSY`.
 - An address for each way the A0, A1 and A2 pins can be wired, from
