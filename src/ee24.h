@@ -42,11 +42,21 @@
    USER CODE markers is the user's and survives every update, so a check in it
    could be edited away, and one added later would never reach it. */
 
-/* The values EE24_TRANSFER can take. They start at 1 on purpose: a misspelt
-   name counts as 0 inside #if, and 0 is then refused below instead of quietly
-   meaning one of them. */
+/* The values EE24_MODE and EE24_TRANSFER can take. They start at 1 on purpose:
+   a misspelt name counts as 0 inside #if, and 0 is then refused below instead
+   of quietly meaning one of them. */
+#define EE24_MODE_BLOCKING      1
+#define EE24_MODE_NON_BLOCKING  2
 #define EE24_TRANSFER_POLLING   1
 #define EE24_TRANSFER_DMA       2
+
+/* Added after the first version, so a configuration file from before has none
+   and gets the calls that wait, as every version before had. */
+#ifndef EE24_MODE
+#define EE24_MODE               EE24_MODE_BLOCKING
+#elif (EE24_MODE != EE24_MODE_BLOCKING) && (EE24_MODE != EE24_MODE_NON_BLOCKING)
+#error "EE24_MODE must be EE24_MODE_BLOCKING or EE24_MODE_NON_BLOCKING"
+#endif
 
 #ifndef EE24_TRANSFER
 #error "EE24_TRANSFER is not defined. Add it to ee24_config.h"
@@ -121,13 +131,13 @@ extern "C"
  */
 typedef enum
 {
-    EE24_ERR_NONE    = 0, /**< Done, or for a job, started: see ee24_wait().          */
+    EE24_ERR_NONE    = 0, /**< Done, or from a _nb call, started.                     */
     EE24_ERR_INVALID = 1, /**< An unknown size, or a handle with no ee24_init().     */
     EE24_ERR_RANGE   = 2, /**< The address and length run past the end of the chip.  */
     EE24_ERR_I2C     = 3, /**< The chip did not answer, or the I2C transfer failed.  */
     EE24_ERR_TIMEOUT = 4, /**< Not finished in the time ee24_config.h allows.        */
     EE24_ERR_MUTEX   = 5, /**< The RTOS could not create or take the mutex.          */
-    EE24_ERR_BUSY    = 6, /**< A job is still running: see ee24_process().           */
+    EE24_ERR_BUSY    = 6, /**< A _nb job still runs: see ee24_process().             */
 
 } ee24_err_t;
 
@@ -145,16 +155,15 @@ typedef struct
     uint16_t          mem_size;     /**< I2C_MEMADD_SIZE_8BIT or _16BIT.                */
     uint8_t           page_size;    /**< Most one write may carry without wrapping.     */
     uint8_t           dev_address;  /**< I2C address, with the pins the chip ignores 0. */
-    uint8_t           job_state;    /**< What the running job is doing.                 */
-    ee24_err_t        job_result;   /**< How the last job ended, for ee24_wait().       */
-    uint8_t           *job_data;    /**< The caller's buffer.                           */
-    size_t            job_len;      /**< Bytes in the whole job.                        */
-    size_t            job_done;     /**< Bytes finished so far.                         */
-    uint32_t          job_address;  /**< Where in the chip the job starts.              */
-    uint32_t          job_step;     /**< Bytes in the piece under way.                  */
-    uint32_t          job_start;    /**< HAL_GetTick() when that piece started.         */
-    uint32_t          job_timeout;  /**< Time that piece may take.                      */
     osal_mutex_t      mutex;        /**< Lets one thread use the chip at a time.        */
+#if (EE24_MODE == EE24_MODE_NON_BLOCKING)
+    uint8_t           *job_data;    /**< The piece under way, in the caller's buffer.   */
+    size_t            job_left;     /**< Bytes still to go, that piece included.        */
+    uint32_t          job_address;  /**< Where in the chip that piece goes.             */
+    uint32_t          job_start;    /**< HAL_GetTick() when it started.                 */
+    ee24_err_t        job_result;   /**< How the last job ended, for ee24_wait().       */
+    uint8_t           job_state;    /**< What the job is doing.                         */
+#endif
 
 } ee24_t;
 
@@ -184,6 +193,8 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
  */
 ee24_err_t ee24_write(ee24_t *handle, uint32_t address, const uint8_t *data, size_t len);
 
+#if (EE24_MODE == EE24_MODE_NON_BLOCKING)
+
 /*****************************************************************************************************/
 /**
  * @brief Start reading len bytes at address, as a job. Returns at once.
@@ -207,6 +218,8 @@ bool ee24_process(ee24_t *handle);
  * @brief Wait until the running job has ended, and say how it ended.
  */
 ee24_err_t ee24_wait(ee24_t *handle);
+
+#endif /* EE24_MODE == EE24_MODE_NON_BLOCKING */
 
 #ifdef __cplusplus
 }

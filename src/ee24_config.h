@@ -30,23 +30,33 @@
 
 /* USER CODE BEGIN EE24_CONFIGURATION */
 
-/* How reads and writes move their data. Either way ee24_read_nb() and
-   ee24_write_nb() return once started, and ee24_process() or ee24_wait()
-   says when the job has finished. ee24_read() and ee24_write() wait for it.
-   One of:
-     EE24_TRANSFER_POLLING  the CPU moves it, a piece per call
-     EE24_TRANSFER_DMA      the DMA moves it, and the CPU is free meanwhile
+/* How the calls behave. One of:
+     EE24_MODE_BLOCKING      ee24_read() and ee24_write() return once done.
+                             The smallest code, and the handle carries no job.
+     EE24_MODE_NON_BLOCKING  ee24_read_nb() and ee24_write_nb() start a job
+                             and return at once, and ee24_process() moves it
+                             on from your main loop or state machine.
+                             ee24_read() and ee24_write() are there too, and
+                             wait for the job.
+   A call that waits sleeps between its questions only with an RTOS, so other
+   threads run. Without one it asks again at once. */
+#define EE24_MODE                       EE24_MODE_BLOCKING
+
+/* How reads and writes move their data. One of:
+     EE24_TRANSFER_POLLING  the CPU moves it
+     EE24_TRANSFER_DMA      the DMA moves it, and the CPU is free for a job or,
+                            with an RTOS, for other threads
    With DMA, give the I2C a DMA channel for TX and one for RX in CubeMX, and
    turn on the I2C event and error interrupts. */
 #define EE24_TRANSFER                   EE24_TRANSFER_POLLING
 
-/* By polling, the most one call reads, in bytes, from 1 to 32768. A read is a
-   job: ee24_read_nb() reads the first piece and each ee24_process() the next,
-   so no call keeps your code longer than one piece takes. 32 bytes, the
-   biggest page, take 0.8 ms at 400 kHz and 3.3 ms at 100 kHz, as long as
-   writing a page does. Bigger is faster in all, since each piece sends its
-   address again: 1 KB takes 26 ms in pieces of 32, 23 ms in pieces of 256. Not
-   used with DMA. */
+/* With EE24_MODE_NON_BLOCKING and by polling, the most one call reads, in
+   bytes, from 1 to 32768: ee24_read_nb() reads the first piece and each
+   ee24_process() the next, so no call keeps your code longer than one piece
+   takes. 32 bytes, the biggest page, take 0.8 ms at 400 kHz and 3.3 ms at
+   100 kHz, as long as writing a page does. Bigger is faster in all, since each
+   piece sends its address again: 1 KB takes 26 ms in pieces of 32, 23 ms in
+   pieces of 256. Not used otherwise. */
 #define EE24_POLL_CHUNK                 32U
 
 /* How long each step may take, in milliseconds, before it ends with
