@@ -356,7 +356,7 @@ On an F7 or H7 with the data cache on, the DMA and the CPU can see different cop
 
 ### With an RTOS
 
-Set `OSAL_RTOS` in your `osal_config.h` and each chip gets its own mutex, created by `ee24_init()`. A call that finds another thread using the chip waits for it, up to `EE24_TIMEOUT_MUTEX_MS`. Blocking, that is every call: two threads that read and write the same chip simply take turns. While a job waits for the chip, `ee24_read()`, `ee24_write()` and `ee24_wait()` sleep and your other threads run.
+Set `OSAL_RTOS` in your `osal_config.h` and each chip gets its own mutex, created by `ee24_init()`. A call that finds another thread using the chip waits for it, up to `EE24_TIMEOUT_MUTEX_MS`. Blocking, that is every call: two threads that read and write the same chip simply take turns. While a job waits for the chip or the DMA, `ee24_read()`, `ee24_write()` and `ee24_wait()` sleep a tick at a time through `osal_pause()`, and your other threads run. Between the pieces of a read by polling they only yield, through `osal_yield()`: the threads of the same priority get a turn, and the read is not slowed.
 
 Start the RTOS first. With one set, call every ee24 function from a thread, `ee24_init()` included, and never from `main()` before the kernel starts: the mutex and the sleeps need a running RTOS. So settings are loaded at the top of your first thread:
 

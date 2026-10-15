@@ -29,10 +29,6 @@
  * ****************************************************************************************************
 */
 
-/* With an RTOS, how long a call that waits sleeps between its questions, so
-   other threads run. */
-#define EE24_POLL_MS            1U
-
 /* How hard ee24_init() tries to find the chip. */
 #define EE24_INIT_TRIALS        2U
 #define EE24_INIT_TIMEOUT_MS    100U
@@ -113,7 +109,6 @@ static ee24_err_t    ee24_receive(ee24_t *handle, uint32_t address, uint8_t *dat
 static ee24_err_t    ee24_moved(ee24_t *handle, uint32_t start, uint32_t len);
 #endif
 static ee24_err_t    ee24_stored(ee24_t *handle, uint32_t address, uint32_t start);
-static void          ee24_yield(void);
 static uint32_t      ee24_chunk(uint32_t address, size_t left, uint32_t boundary);
 static ee24_target_t ee24_target(const ee24_t *handle, uint32_t address);
 static uint32_t      ee24_transfer_time(uint32_t bytes);
@@ -268,6 +263,13 @@ ee24_err_t ee24_read(ee24_t *handle, uint32_t address, uint8_t *data, size_t len
                 if (err == EE24_ERR_NONE)
                 {
                     err = ee24_until_moved(handle, step);
+                }
+#else
+                /* The CPU moved that piece itself. Threads of the same
+                   priority get a turn before the next. */
+                if ((err == EE24_ERR_NONE) && ((done + step) < len))
+                {
+                    osal_yield();
                 }
 #endif
 
@@ -572,10 +574,12 @@ bool ee24_process(ee24_t *handle)
  * @brief Wait until the running job has ended, and say how it ended. Not from an interrupt.
  *
  * Asks first, so after ee24_process() has returned false, or after a call that
- * finished or was refused at once, it returns straight away. With an RTOS it
- * sleeps a millisecond through osal between steps while the chip or the DMA
- * has the job, so other threads run. Without one it takes the next step at
- * once. Call it from the thread that started the job.
+ * finished or was refused at once, it returns straight away. While the chip or
+ * the DMA has the job it pauses between steps through osal: with an RTOS a
+ * tick's sleep, so every other thread runs, and without one none, so the next
+ * step comes at once. Between the pieces of a read by polling it only yields,
+ * which gives the threads of the same priority a turn without slowing the
+ * read. Call it from the thread that started the job.
  *
  * @param[in,out] handle  Handle from ee24_init().
  * @return How the last read or write ended: EE24_ERR_NONE when it worked.
@@ -588,11 +592,17 @@ ee24_err_t ee24_wait(ee24_t *handle)
     {
 #if (EE24_TRANSFER == EE24_TRANSFER_POLLING)
         /* A read by polling moves a piece with every step and waits for
-           nothing, so a sleep between would only slow it down. */
-        if (handle->job_state != EE24_JOB_READ)
+           nothing, so a pause would only slow it down. A yield gives the
+           threads of the same priority a turn between pieces instead. */
+        if (handle->job_state == EE24_JOB_READ)
+        {
+            osal_yield();
+        }
+        else
 #endif
         {
-            ee24_yield();
+            /* The chip or the DMA has the job. */
+            osal_pause();
         }
     }
 
@@ -755,7 +765,7 @@ static ee24_err_t ee24_until_moved(ee24_t *handle, uint32_t len)
     /* Asked after a sleep, not before: the transfer has only just started. */
     while (err == EE24_ERR_BUSY)
     {
-        ee24_yield();
+        osal_pause();
         err = ee24_moved(handle, start, len);
     }
 
@@ -780,7 +790,7 @@ static ee24_err_t ee24_until_stored(ee24_t *handle, uint32_t address)
     /* Asked after a sleep, not before: the chip has only just begun. */
     while (err == EE24_ERR_BUSY)
     {
-        ee24_yield();
+        osal_pause();
         err = ee24_stored(handle, address, start);
     }
 
@@ -1199,21 +1209,6 @@ static ee24_err_t ee24_stored(ee24_t *handle, uint32_t address, uint32_t start)
     }
 
     return err;
-}
-
-/*****************************************************************************************************/
-/**
- * @brief Let other threads run for a millisecond, with an RTOS, while the chip or the DMA works.
- *
- * Without an RTOS nothing else could run meanwhile, so it returns at once and
- * the caller asks again straight away: a sleep would only make the job end
- * later.
- */
-static void ee24_yield(void)
-{
-#if (OSAL_RTOS != OSAL_RTOS_NONE)
-    osal_delay_ms(EE24_POLL_MS);
-#endif
 }
 
 /*****************************************************************************************************/

@@ -52,7 +52,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The RTOS is reached through [osal](https://github.com/nimaltd/osal), which the installer
   puts in with ee24, and it is set once in `osal_config.h` for every library
   that uses osal. With an RTOS, every call has to come from a thread once the
-  RTOS runs, `ee24_init()` included.
+  RTOS runs, `ee24_init()` included. It needs osal 1.1.0 or newer: a wait
+  for the chip or the DMA calls `osal_pause()`, a tick's sleep with an RTOS
+  and none without, and a read by polling calls `osal_yield()` between its
+  pieces, so the threads of the same priority get a turn.
 - Installed with [stm32-installer](https://github.com/nimaltd/stm32-installer)
   rather than the STM32CubeMX pack.
 - Licence changed from GPLv2 or commercial to Apache-2.0.

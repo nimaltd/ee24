@@ -165,6 +165,7 @@ static int                mutex_held         = 0;
 static uint32_t           mutex_last_wait    = 0U;
 static int                sleeps             = 0;
 static uint32_t           last_sleep_ms      = 0U;
+static int                yields             = 0;
 
 /*
  * ****************************************************************************************************
@@ -647,6 +648,28 @@ void osal_delay_ms(uint32_t ms)
 
 /*****************************************************************************************************/
 /**
+ * @brief Let the threads of the same priority run: counted, and no time passes.
+ */
+void osal_yield(void)
+{
+    yields++;
+}
+
+/*****************************************************************************************************/
+/**
+ * @brief Pause a wait, as osal does: with an RTOS a sleep of one tick, 1 ms here, and without one nothing.
+ *
+ * Without an RTOS the clock moves only as the fake HAL spends it.
+ */
+void osal_pause(void)
+{
+#if (OSAL_RTOS != OSAL_RTOS_NONE)
+    osal_delay_ms(1U);
+#endif
+}
+
+/*****************************************************************************************************/
+/**
  * @brief Start every test from a new 24C256, a stopped clock and a free mutex.
  */
 void setUp(void)
@@ -950,6 +973,7 @@ void test_a_write_is_split_at_every_page(void)
     TEST_ASSERT_EQUAL_INT(EE24_ERR_NONE, write_all(30U, pattern, 40U));
 
     TEST_ASSERT_EQUAL_INT(3, chip.writes);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, yields, "yielded while the chip stored a page");
     TEST_ASSERT_EQUAL_UINT16_MESSAGE(2U, chip.write_sizes[0], "did not stop at the first page end");
     TEST_ASSERT_EQUAL_UINT16(32U, chip.write_sizes[1]);
     TEST_ASSERT_EQUAL_UINT16(6U, chip.write_sizes[2]);
@@ -992,6 +1016,13 @@ void test_a_read_is_split_at_every_block(void)
     TEST_ASSERT_EQUAL_INT(pieces, chip.reads);
     TEST_ASSERT_EQUAL_INT_MESSAGE((READ_PIECE >= 256U) ? 4 : pieces, chip.reads,
                                   "a block was split into more pieces than it needed");
+
+    /* By polling the CPU moves every piece, and the threads of the same
+       priority get a turn between two. In a job the call that starts it reads
+       the first piece and the wait's first step, which comes at once, the
+       second, so there is one yield fewer. With DMA nothing yields. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(USES_DMA ? 0 : (pieces - (USES_JOBS ? 2 : 1)), yields,
+                                  "did not yield between the pieces, or yielded with DMA");
 }
 
 /*****************************************************************************************************/
@@ -2157,6 +2188,7 @@ static void counts_clear(void)
     mutex_last_wait     = 0U;
     sleeps              = 0;
     last_sleep_ms       = 0U;
+    yields              = 0;
 }
 
 /*****************************************************************************************************/
