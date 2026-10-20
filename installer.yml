@@ -20,7 +20,7 @@ provides: []
 
 # What the project has to offer before this library works.
 requires:
-  installer: 1.9.0    # the first that reads installer.yml
+  installer: 2.1.0    # every file at its own path; an older installer stops
   libraries:
     - nimaltd/osal >= 1.1.0   # the mutex, osal_pause() and osal_yield(), bare metal or RTOS
   hal: true           # HAL I2C, GPIO and the tick
@@ -33,18 +33,17 @@ requires:
       note: 7 bit addressing, standard or fast mode
   c_standard: c11
 
-# The code keeps its src/ folder in the user's project, just as it sits here.
-install:
-  layout: mirror
+# Written for 2.1.0: every file keeps the path it has here, so src/ lands in
+# the user's project just as it sits, and headers and sources need no files
+# around them.
 
 # The configuration header comes after the main one, which the version is
 # read from. Its settings, between its USER CODE lines, survive every update.
-files:
-  headers:
-    - src/ee24.h
-    - src/ee24_config.h
-  sources:
-    - src/ee24.c
+headers:
+  - src/ee24.h
+  - src/ee24_config.h
+sources:
+  - src/ee24.c
 
 # Copied as they are, alongside the code.
 extras:
