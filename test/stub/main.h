@@ -213,4 +213,28 @@ HAL_StatusTypeDef HAL_I2C_Init(I2C_HandleTypeDef *hi2c);
  */
 void HAL_GPIO_WritePin(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin, GPIO_PinState PinState);
 
+/*****************************************************************************************************/
+/**
+ * @brief The exception running, 0 in thread mode. CMSIS core gives the real one; osal asks it.
+ */
+uint32_t __get_IPSR(void);
+
+/*****************************************************************************************************/
+/**
+ * @brief PRIMASK, 1 while every interrupt is masked. osal's critical section reads it.
+ */
+uint32_t __get_PRIMASK(void);
+
+/*****************************************************************************************************/
+/**
+ * @brief Set PRIMASK, as osal's critical section does on its way out.
+ */
+void __set_PRIMASK(uint32_t priMask);
+
+/*****************************************************************************************************/
+/**
+ * @brief Mask every interrupt, as osal's critical section does on its way in.
+ */
+void __disable_irq(void);
+
 #endif /* MAIN_H */
