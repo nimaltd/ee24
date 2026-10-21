@@ -72,18 +72,18 @@ installed copy.
 
 ## ⚙️ Installing it
 
-[stm32-installer](https://github.com/nimaltd/stm32-installer) copies the library into your project, creates your `ee24_config.h`, and adds it to your CMake, STM32CubeIDE, Keil, IAR or Makefile project for you. Your project file is backed up first. It also checks that I2C is enabled in your CubeMX project, and says so if it is not.
+[lib-installer](https://github.com/nimaltd/lib-installer) copies the library into your project, creates your `ee24_config.h`, and adds it to your CMake, STM32CubeIDE, Keil, IAR or Makefile project for you. Your project file is backed up first. It also checks that I2C is enabled in your CubeMX project, and says so if it is not.
 
 Install it once per machine:
 
 ```bash
-pip install stm32-installer
+pip install lib-installer
 ```
 
 Then, from the root of your STM32 project:
 
 ```bash
-stm32-installer nimaltd/ee24
+lib-installer nimaltd/ee24
 ```
 
 ee24 waits and locks through [osal](https://github.com/nimaltd/osal), so the installer puts osal in first, and asks for its folder like any library. If another library already brought osal into your project, that copy is kept and nothing is asked.
@@ -93,19 +93,19 @@ ee24 waits and locks through [osal](https://github.com/nimaltd/osal), so the ins
 Downloaded this repository with **Code**, **Download ZIP**? Give the installer the zip in place of `nimaltd/ee24`, with no need to unpack it:
 
 ```bash
-stm32-installer D:/Downloads/ee24-main.zip
+lib-installer D:/Downloads/ee24-main.zip
 ```
 
-Only the files the library needs are copied into your project, and the zip is left alone. An unpacked folder works the same way. On a machine with no internet, give it the osal zip as well, `stm32-installer D:/Downloads/ee24-main.zip D:/Downloads/osal-main.zip`, so it does not try to fetch osal. [stm32-installer's README](https://github.com/nimaltd/stm32-installer#installing-a-library) has every option, and how to install on a machine with no internet at all.
+Only the files the library needs are copied into your project, and the zip is left alone. An unpacked folder works the same way. On a machine with no internet, give it the osal zip as well, `lib-installer D:/Downloads/ee24-main.zip D:/Downloads/osal-main.zip`, so it does not try to fetch osal. [lib-installer's README](https://github.com/nimaltd/lib-installer#installing-a-library) has every option, and how to install on a machine with no internet at all.
 
 ### Updating, and pinning a version
 
-Run the same command again. The code is replaced, and your settings in `ee24_config.h`, between its `USER CODE` lines, are kept. osal is updated only when ee24 needs a newer one, and your setting in `osal_config.h` is kept the same way. This needs stm32-installer 1.9.0 or newer. An older one cannot find the library: update it with `pip install --upgrade stm32-installer`.
+Run the same command again. The code is replaced, and your settings in `ee24_config.h`, between its `USER CODE` lines, are kept. osal is updated only when ee24 needs a newer one, and your setting in `osal_config.h` is kept the same way.
 
 By default you get the newest code on `main`. To hold a project on one release, add `--ref` with a tag, a branch or a commit:
 
 ```bash
-stm32-installer nimaltd/ee24 --ref v4.0.0
+lib-installer nimaltd/ee24 --ref v4.0.0
 ```
 
 ### Or copy the files in by hand
@@ -131,7 +131,7 @@ target_link_libraries(ee24 PRIVATE stm32cubemx)
 
 The first `target_link_libraries` has no `PRIVATE` on purpose. CubeMX links your application without one, and CMake refuses to mix the two forms on one target. The settings come from `ee24/src/ee24_config.h`, beside `ee24.h`, and the RTOS setting from `osal/src/osal_config.h`, beside `osal.h`.
 
-`stm32-installer` avoids all of this: it writes an INTERFACE target instead, whose sources compile as part of your own target and inherit everything it has.
+`lib-installer` avoids all of this: it writes an INTERFACE target instead, whose sources compile as part of your own target and inherit everything it has.
 
 ---
 
@@ -440,7 +440,7 @@ ctest --test-dir build --output-on-failure
 
 ## ⬆️ Coming from version 3
 
-The CubeMX pack is replaced by stm32-installer, and every name changed:
+The CubeMX pack is replaced by lib-installer, and every name changed:
 
 | Was | Is now |
 |---|---|
