@@ -72,31 +72,27 @@ installed copy.
 
 ## ⚙️ Installing it
 
-[lib-installer](https://github.com/nimaltd/lib-installer) copies the library into your project, creates your `ee24_config.h`, and adds it to your CMake, STM32CubeIDE, Keil, IAR or Makefile project for you. Your project file is backed up first. It also checks that I2C is enabled in your CubeMX project, and says so if it is not.
+[libNIMA](https://github.com/nimaltd/libNIMA) copies the library into your project, creates your `ee24_config.h`, and adds it to your CMake, STM32CubeIDE, Keil, IAR or Makefile project for you. Your project file is backed up first. It also checks that I2C is enabled in your CubeMX project, and says so if it is not.
 
-Install it once per machine:
-
-```bash
-pip install lib-installer
-```
+Get it once per machine from [its releases page](https://github.com/nimaltd/libNIMA/releases/latest): the installer for Windows, macOS or Linux, which puts the `libnima` command on your PATH as well.
 
 Then, from the root of your STM32 project:
 
 ```bash
-lib-installer nimaltd/ee24
+libnima nimaltd/ee24
 ```
 
-ee24 waits and locks through [osal](https://github.com/nimaltd/osal), so the installer puts osal in first, and asks for its folder like any library. If another library already brought osal into your project, that copy is kept and nothing is asked.
+ee24 waits and locks through [osal](https://github.com/nimaltd/osal), so libNIMA puts osal in first, and asks for its folder like any library. If another library already brought osal into your project, that copy is kept and nothing is asked.
 
 ### From a downloaded zip
 
-Downloaded this repository with **Code**, **Download ZIP**? Give the installer the zip in place of `nimaltd/ee24`, with no need to unpack it:
+Downloaded this repository with **Code**, **Download ZIP**? Give libNIMA the zip in place of `nimaltd/ee24`, with no need to unpack it:
 
 ```bash
-lib-installer D:/Downloads/ee24-main.zip
+libnima D:/Downloads/ee24-main.zip
 ```
 
-Only the files the library needs are copied into your project, and the zip is left alone. An unpacked folder works the same way. On a machine with no internet, give it the osal zip as well, `lib-installer D:/Downloads/ee24-main.zip D:/Downloads/osal-main.zip`, so it does not try to fetch osal. [lib-installer's README](https://github.com/nimaltd/lib-installer#installing-a-library) has every option, and how to install on a machine with no internet at all.
+Only the files the library needs are copied into your project, and the zip is left alone. An unpacked folder works the same way. On a machine with no internet, give it the osal zip as well, `libnima D:/Downloads/ee24-main.zip D:/Downloads/osal-main.zip`, so it does not try to fetch osal. [libNIMA's README](https://github.com/nimaltd/libNIMA#using-it) has every option, and how to install on a machine with no internet at all.
 
 ### Updating, and pinning a version
 
@@ -105,7 +101,7 @@ Run the same command again. The code is replaced, and your settings in `ee24_con
 By default you get the newest code on `main`. To hold a project on one release, add `--ref` with a tag, a branch or a commit:
 
 ```bash
-lib-installer nimaltd/ee24 --ref v4.0.0
+libnima nimaltd/ee24 --ref v4.0.0
 ```
 
 ### Or copy the files in by hand
@@ -131,7 +127,7 @@ target_link_libraries(ee24 PRIVATE stm32cubemx)
 
 The first `target_link_libraries` has no `PRIVATE` on purpose. CubeMX links your application without one, and CMake refuses to mix the two forms on one target. The settings come from `ee24/src/ee24_config.h`, beside `ee24.h`, and the RTOS setting from `osal/src/osal_config.h`, beside `osal.h`.
 
-`lib-installer` avoids all of this: it writes an INTERFACE target instead, whose sources compile as part of your own target and inherit everything it has.
+`libnima` avoids all of this: it writes an INTERFACE target instead, whose sources compile as part of your own target and inherit everything it has.
 
 ---
 
@@ -440,7 +436,7 @@ ctest --test-dir build --output-on-failure
 
 ## ⬆️ Coming from version 3
 
-The CubeMX pack is replaced by lib-installer, and every name changed:
+The CubeMX pack is replaced by libNIMA, and every name changed:
 
 | Was | Is now |
 |---|---|
