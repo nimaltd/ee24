@@ -3,17 +3,6 @@
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- A `_nb` call refused with `EE24_ERR_BUSY` no longer changes what
-  `ee24_wait()` reports: the job that runs, or has just ended, keeps its own
-  result.
-- A transfer the HAL refused because the bus was busy is `EE24_ERR_I2C`. It
-  could be reported as `EE24_ERR_TIMEOUT`, from an error the transfer before
-  had left in the HAL.
-
 ## [4.0.0] - 2026-09-29
 
 ### Changed
@@ -117,3 +106,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   chip puts its block number, every block was sent to the same wrong one: with
   A0 on a 24C04, bytes 0 to 255 were read from and written to 256 to 511.
   `ee24_init()` now ignores those pins, as the chip does.
+- A `_nb` call refused with `EE24_ERR_BUSY` no longer changes what
+  `ee24_wait()` reports: the job that runs, or has just ended, keeps its own
+  result.
+- A transfer the HAL refused because the bus was busy is `EE24_ERR_I2C`. It
+  could be reported as `EE24_ERR_TIMEOUT`, from an error the transfer before
+  had left in the HAL.
+
