@@ -453,9 +453,13 @@ ee24_err_t ee24_read_nb(ee24_t *handle, uint32_t address, uint8_t *data, size_t 
         }
     }
 
-    /* What ee24_wait() reports. A job started here, or one still running,
-       puts its own result over this when it ends. */
-    handle->job_result = err;
+    /* What ee24_wait() reports. A job started here puts its own result over
+       this when it ends. A call refused as busy leaves it alone: the job that
+       runs, or has just ended, is another call's, and so is its result. */
+    if (err != EE24_ERR_BUSY)
+    {
+        handle->job_result = err;
+    }
 
     return err;
 }
@@ -510,9 +514,13 @@ ee24_err_t ee24_write_nb(ee24_t *handle, uint32_t address, const uint8_t *data, 
         }
     }
 
-    /* What ee24_wait() reports. A job started here, or one still running,
-       puts its own result over this when it ends. */
-    handle->job_result = err;
+    /* What ee24_wait() reports. A job started here puts its own result over
+       this when it ends. A call refused as busy leaves it alone: the job that
+       runs, or has just ended, is another call's, and so is its result. */
+    if (err != EE24_ERR_BUSY)
+    {
+        handle->job_result = err;
+    }
 
     return err;
 }
@@ -1338,13 +1346,24 @@ static ee24_err_t ee24_i2c_error(const ee24_t *handle, HAL_StatusTypeDef status)
 {
     ee24_err_t err = EE24_ERR_NONE;
 
-    if (status != HAL_OK)
+    if (status == HAL_BUSY)
+    {
+        /* Refused before it began, the bus busy with something else. The HAL
+           leaves its error code as the transfer before left it, which could
+           still say timeout, so it is not asked. */
+        err = EE24_ERR_I2C;
+    }
+    else if (status != HAL_OK)
     {
         /* A transfer that ran out of time comes back as HAL_ERROR on some
            families and HAL_TIMEOUT on others, but the HAL notes it in the
            error code on all of them. */
         err = ((HAL_I2C_GetError(handle->hi2c) & HAL_I2C_ERROR_TIMEOUT) != 0U) ? EE24_ERR_TIMEOUT
                                                                                : EE24_ERR_I2C;
+    }
+    else
+    {
+        /* Done, or started. */
     }
 
     return err;

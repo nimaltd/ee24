@@ -1621,6 +1621,7 @@ void test_a_call_while_a_job_runs_is_refused(void)
     TEST_ASSERT_EQUAL_INT(EE24_ERR_BUSY, ee24_read_nb(&ee, 0U, readback, 4U));
     TEST_ASSERT_EQUAL_INT(EE24_ERR_BUSY, ee24_write_nb(&ee, 0U, pattern, 4U));
     TEST_ASSERT_EQUAL_INT(transfers, chip.transfers);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(EE24_ERR_NONE, ee.job_result, "a refused call changed the job's result");
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, mutex_takes, "a refused call took the mutex");
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(EE24_ERR_NONE, ee24_wait(&ee),
